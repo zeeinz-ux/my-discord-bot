@@ -1,8 +1,11 @@
 """
-SpotifyDown API Integration — Async Resolver dengan Triple Fallback
-====================================================================
-Module ini menggantikan seluruh scraping logic lama (oEmbed + HTML parse)
-dengan API call async ke SpotifyDown, plus fallback ke Spotify Official API.
+SpotifyDown API Integration — Async Resolver dengan Multi-Fallback
+===================================================================
+Fallback chain:
+    1. SpotifyDown API (async, no auth) — fastest, bisa down
+    2. Spotify Official API (async, Client Credentials) — stable but rate-limited
+    3. Spotify oEmbed (sync, no auth) — simple metadata only
+    4. Spotify HTML scrape (sync, no auth) — last resort
 
 Cara pakai di cog:
     from .spotify_down import SpotifyResolver
@@ -13,7 +16,6 @@ Cara pakai di cog:
     )
 
     tracks = await self.spotify.resolve(url, session)
-    # tracks = list[ResolvedTrack]
 """
 
 import asyncio
@@ -25,6 +27,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple
 
 import aiohttp
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +57,7 @@ class ResolvedTrack:
     spotify_id: str
     youtube_id: Optional[str]
     query: str          # Query untuk wavelink.Playable.search()
-    source: str         # "spotifydown" | "spotify_official" | "ytsearch"
+    source: str         # "spotifydown" | "spotify_official" | "oembed" | "html_scrape" | "ytsearch"
 
 
 # ==========================================================
@@ -159,7 +162,7 @@ class SpotifyDownClient:
 
 
 # ==========================================================
-# SPOTIFY OFFICIAL API (Fallback)
+# SPOTIFY OFFICIAL API (Fallback 1)
 # ==========================================================
 class SpotifyOfficialClient:
     """Fallback menggunakan Spotify Web API dengan Client Credentials."""
@@ -264,12 +267,89 @@ class SpotifyOfficialClient:
 
 
 # ==========================================================
+# SPOTIFY OEMBED (Fallback 2 — sync, no auth)
+# ==========================================================
+def _get_spotify_metadata_oembed(url: str) -> Dict | None:
+    """Spotify oEmbed API (gratis, tidak perlu auth)."""
+    try:
+        oembed_url = f"https://open.spotify.com/oembed?url={requests.utils.quote(url)}"
+        resp = requests.get(oembed_url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        return {
+            'name': data.get('title', ''),
+            'artists': data.get('author_name', ''),
+            'artwork': data.get('thumbnail_url', ''),
+            'album': None,
+            'duration_ms': None,
+        }
+    except Exception as e:
+        logger.error("[SPOTIFY OEMBED ERROR] %s", e)
+        return None
+
+
+# ==========================================================
+# SPOTIFY HTML SCRAPE (Fallback 3 — sync, no auth)
+# ==========================================================
+def _get_spotify_metadata_html(url: str) -> Dict | None:
+    """Scrape metadata dari HTML Spotify page."""
+    try:
+        resp = requests.get(url, timeout=10, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+        })
+        if resp.status_code != 200:
+            return None
+        html = resp.text
+
+        title_match = re.search(r'<meta[^>]*property="og:title"[^>]*content="([^"]*)"', html)
+        title = title_match.group(1) if title_match else ''
+
+        desc_match = re.search(r'<meta[^>]*property="og:description"[^>]*content="([^"]*)"', html)
+        description = desc_match.group(1) if desc_match else ''
+
+        image_match = re.search(r'<meta[^>]*property="og:image"[^>]*content="([^"]*)"', html)
+        image = image_match.group(1) if image_match else ''
+
+        artist = ''
+        if ' · ' in description:
+            parts = description.split(' · ')
+            if len(parts) >= 1:
+                artist = parts[0].replace('Listen to ', '').replace(' on Spotify', '').strip()
+        elif ' - ' in description:
+            artist = description.split(' - ')[0].strip()
+
+        if not artist and title:
+            if ' - ' in title:
+                artist = title.split(' - ')[-1].strip()
+                title = title.split(' - ')[0].strip()
+            elif ' — ' in title:
+                artist = title.split(' — ')[-1].strip()
+                title = title.split(' — ')[0].strip()
+
+        return {
+            'name': title,
+            'artists': artist,
+            'artwork': image,
+            'album': None,
+            'duration_ms': None,
+        }
+    except Exception as e:
+        logger.error("[SPOTIFY HTML SCRAPE ERROR] %s", e)
+        return None
+
+
+# ==========================================================
 # UNIFIED RESOLVER
 # ==========================================================
 class SpotifyResolver:
     """
     Resolver utama untuk Spotify URLs.
-    Flow: SpotifyDown → Spotify Official → ytsearch fallback
+    Flow: SpotifyDown → Spotify Official → oEmbed → HTML scrape → ytsearch
     """
 
     def __init__(
@@ -307,11 +387,11 @@ class SpotifyResolver:
         sd = SpotifyDownClient(session)
 
         if spotify_type == "track":
-            return await self._resolve_track(spotify_id, sd, session)
+            return await self._resolve_track(spotify_id, sd, session, url)
         elif spotify_type == "playlist":
-            return await self._resolve_playlist(spotify_id, sd, session)
+            return await self._resolve_playlist(spotify_id, sd, session, url)
         elif spotify_type == "album":
-            return await self._resolve_album(spotify_id, sd, session)
+            return await self._resolve_album(spotify_id, sd, session, url)
 
         return [], "invalid"
 
@@ -323,6 +403,7 @@ class SpotifyResolver:
         track_id: str,
         sd: SpotifyDownClient,
         session: aiohttp.ClientSession,
+        original_url: str,
     ) -> Tuple[List[ResolvedTrack], str]:
         # 1. Coba SpotifyDown getId
         yt_id = await sd.get_youtube_id(track_id)
@@ -349,7 +430,41 @@ class SpotifyResolver:
                     self._track_to_resolved(track_data, track_id, "spotify_official")
                 ], "spotify_official"
 
-        # 3. Ultimate fallback: ytsearch pakai track ID (last resort)
+        # 3. Fallback oEmbed
+        meta = _get_spotify_metadata_oembed(original_url)
+        if meta and meta.get('name'):
+            return [
+                ResolvedTrack(
+                    name=meta['name'],
+                    artists=meta['artists'],
+                    album=meta.get('album'),
+                    duration_ms=meta.get('duration_ms'),
+                    artwork=meta.get('artwork'),
+                    spotify_id=track_id,
+                    youtube_id=None,
+                    query=f"ytsearch:{meta['name']} {meta['artists']}",
+                    source="oembed",
+                )
+            ], "oembed"
+
+        # 4. Fallback HTML scrape
+        meta = _get_spotify_metadata_html(original_url)
+        if meta and meta.get('name'):
+            return [
+                ResolvedTrack(
+                    name=meta['name'],
+                    artists=meta['artists'],
+                    album=meta.get('album'),
+                    duration_ms=meta.get('duration_ms'),
+                    artwork=meta.get('artwork'),
+                    spotify_id=track_id,
+                    youtube_id=None,
+                    query=f"ytsearch:{meta['name']} {meta['artists']}",
+                    source="html_scrape",
+                )
+            ], "html_scrape"
+
+        # 5. Ultimate fallback
         return [
             ResolvedTrack(
                 name=f"Spotify Track {track_id}",
@@ -372,6 +487,7 @@ class SpotifyResolver:
         playlist_id: str,
         sd: SpotifyDownClient,
         session: aiohttp.ClientSession,
+        original_url: str,
     ) -> Tuple[List[ResolvedTrack], str]:
         # 1. SpotifyDown
         raw = await sd.get_playlist_tracks(playlist_id)
@@ -387,6 +503,40 @@ class SpotifyResolver:
                     for t in raw
                 ], "spotify_official"
 
+        # 3. Fallback oEmbed (cuma dapat 1 track = nama playlist)
+        meta = _get_spotify_metadata_oembed(original_url)
+        if meta and meta.get('name'):
+            return [
+                ResolvedTrack(
+                    name=meta['name'],
+                    artists=meta['artists'],
+                    album=None,
+                    duration_ms=None,
+                    artwork=meta.get('artwork'),
+                    spotify_id=playlist_id,
+                    youtube_id=None,
+                    query=f"ytsearch:{meta['name']} {meta['artists']} playlist",
+                    source="oembed",
+                )
+            ], "oembed"
+
+        # 4. Fallback HTML scrape
+        meta = _get_spotify_metadata_html(original_url)
+        if meta and meta.get('name'):
+            return [
+                ResolvedTrack(
+                    name=meta['name'],
+                    artists=meta['artists'],
+                    album=None,
+                    duration_ms=None,
+                    artwork=meta.get('artwork'),
+                    spotify_id=playlist_id,
+                    youtube_id=None,
+                    query=f"ytsearch:{meta['name']} {meta['artists']} playlist",
+                    source="html_scrape",
+                )
+            ], "html_scrape"
+
         return [], "failed"
 
     # --------------------------------------------------------
@@ -397,6 +547,7 @@ class SpotifyResolver:
         album_id: str,
         sd: SpotifyDownClient,
         session: aiohttp.ClientSession,
+        original_url: str,
     ) -> Tuple[List[ResolvedTrack], str]:
         # 1. SpotifyDown
         raw = await sd.get_album_tracks(album_id)
@@ -407,7 +558,6 @@ class SpotifyResolver:
         if self.official:
             raw = await self.official.get_album_tracks(session, album_id)
             if raw:
-                # Ambil album info untuk artwork
                 album_info = None
                 try:
                     token = await self.official._get_token(session)
@@ -441,6 +591,40 @@ class SpotifyResolver:
                         )
                     result.append(rt)
                 return result, "spotify_official"
+
+        # 3. Fallback oEmbed
+        meta = _get_spotify_metadata_oembed(original_url)
+        if meta and meta.get('name'):
+            return [
+                ResolvedTrack(
+                    name=meta['name'],
+                    artists=meta['artists'],
+                    album=meta['name'],
+                    duration_ms=None,
+                    artwork=meta.get('artwork'),
+                    spotify_id=album_id,
+                    youtube_id=None,
+                    query=f"ytsearch:{meta['name']} {meta['artists']} album",
+                    source="oembed",
+                )
+            ], "oembed"
+
+        # 4. Fallback HTML scrape
+        meta = _get_spotify_metadata_html(original_url)
+        if meta and meta.get('name'):
+            return [
+                ResolvedTrack(
+                    name=meta['name'],
+                    artists=meta['artists'],
+                    album=meta['name'],
+                    duration_ms=None,
+                    artwork=meta.get('artwork'),
+                    spotify_id=album_id,
+                    youtube_id=None,
+                    query=f"ytsearch:{meta['name']} {meta['artists']} album",
+                    source="html_scrape",
+                )
+            ], "html_scrape"
 
         return [], "failed"
 
