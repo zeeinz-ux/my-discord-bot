@@ -29,6 +29,10 @@
 
   <form id="welcomeForm" novalidate>
     <input type="hidden" name="guild_id" value="{{ guild_id }}" />
+    <!-- Hidden inputs untuk file upload (Catbox) -->
+    <input type="hidden" name="uploaded_file_data" id="uploaded_file_data" value="" />
+    <input type="hidden" name="uploaded_file_name" id="uploaded_file_name" value="" />
+    <input type="hidden" name="upload_target" id="upload_target" value="" />
 
     <!-- Card 1: Pengaturan Dasar -->
     <div class="card">
