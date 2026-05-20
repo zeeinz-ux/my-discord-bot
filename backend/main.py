@@ -1,7 +1,10 @@
 import sys
 import os
 
-# Add root project to Python path agar import backend.* works
+# ==========================================================
+# FIX: Agar Python bisa menemukan package 'backend'
+# WAJIB di baris 1-6 sebelum import lain
+# ==========================================================
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
@@ -15,28 +18,20 @@ from dotenv import load_dotenv
 import wavelink
 import asyncio
 
-# ==========================================================
-# 1. Path setup — pastikan .env di backend/ ketemu
-# ==========================================================
-_backend_dir = os.path.dirname(os.path.abspath(__file__))
-env_path = os.path.join(_backend_dir, '.env')
-load_dotenv(env_path)
+load_dotenv()
 
 # ===== INIT FIREBASE SEBELUM LOAD COGS =====
-from cogs import firebase_setup
+from backend.cogs import firebase_setup
 # ============================================
 
 # ===== [DASHBOARD] Import Flask app dari web/ =====
-from web.web_app import app, set_stats, set_guild_channels
+from backend.web.web_app import app, set_stats, set_guild_channels
 # ==================================================
 
 # ===== [UTILS] Shared constants =====
-from utils.constants import LAVALINK_NODES
+from backend.utils.constants import LAVALINK_NODES
 # =====================================
 
-# ==========================================================
-# 3. Discord Bot Intents
-# ==========================================================
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -52,13 +47,14 @@ def run_flask():
 flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
-# ==========================================================
-# 5. Lavalink Setup Hook
-# ==========================================================
+# ===== LAVALINK: PUBLIC NODE =====
 @bot.event
 async def setup_hook():
     nodes = [
-        wavelink.Node(uri=node["uri"], password=node["password"])
+        wavelink.Node(
+            uri=node["uri"],
+            password=node["password"]
+        )
         for node in LAVALINK_NODES
     ]
 
@@ -76,16 +72,18 @@ async def setup_hook():
             print(f"[LAVALINK] ❌ Node {i} gagal: {str(e)[:80]}")
 
     print("[LAVALINK] ⚠️ Lavalink tidak tersedia. Fitur musik mati.")
+# ======================================
 
-# ==========================================================
-# 6. Lavalink Health Check
-# ==========================================================
+# [POLISH] Lavalink auto-reconnect loop
 @tasks.loop(seconds=60)
 async def lavalink_healthcheck():
     if not wavelink.Pool.nodes:
         print("[LAVALINK] ⚠️ Node tidak terdeteksi, mencoba reconnect...")
         node_cfg = LAVALINK_NODES[0]
-        node = wavelink.Node(uri=node_cfg["uri"], password=node_cfg["password"])
+        node = wavelink.Node(
+            uri=node_cfg["uri"],
+            password=node_cfg["password"]
+        )
         try:
             await wavelink.Pool.connect(nodes=[node], client=bot)
             print("[LAVALINK] ✅ Reconnect berhasil!")
@@ -107,7 +105,6 @@ async def update_stats():
             first = list(nodes.values())[0]
             node_uri = getattr(first, "uri", "Unknown")
 
-        # ── Active Players ──
         players = []
         for guild in bot.guilds:
             vc = guild.voice_client
@@ -117,15 +114,15 @@ async def update_stats():
                 if ch:
                     listeners = len([m for m in ch.members if not m.bot])
                 players.append({
-                    "guild":     guild.name,
-                    "track":     vc.current.title,
-                    "author":    vc.current.author or "Unknown",
-                    "duration":  vc.current.length or 0,
-                    "position":  getattr(vc, "position", 0) or 0,
-                    "queue":     len(vc.queue) if hasattr(vc, "queue") else 0,
+                    "guild": guild.name,
+                    "track": vc.current.title,
+                    "author": vc.current.author or "Unknown",
+                    "duration": vc.current.length or 0,
+                    "position": getattr(vc, "position", 0) or 0,
+                    "queue": len(vc.queue) if hasattr(vc, "queue") else 0,
                     "listeners": listeners,
-                    "paused":    getattr(vc, "paused", False),
-                    "artwork":   vc.current.artwork or ""
+                    "paused": getattr(vc, "paused", False),
+                    "artwork": vc.current.artwork or ""
                 })
 
         # ===== [WELCOME] Sync guild channels untuk dropdown di dashboard =====
@@ -138,6 +135,13 @@ async def update_stats():
             set_guild_channels(str(guild.id), text_channels)
         # ==================================================================
 
+        # ===== [GUILDS LIST] Untuk dropdown server di sidebar =====
+        guilds_list = [
+            {"id": str(g.id), "name": g.name, "member_count": g.member_count or 0}
+            for g in bot.guilds
+        ]
+        # ===========================================================
+
         set_stats(
             online=bot.is_ready(),
             username=bot.user.name if bot.user else "Hidden Hamlet",
@@ -147,7 +151,7 @@ async def update_stats():
             lavalink_connected=lavalink_ok,
             lavalink_node=node_uri,
             players=players,
-            guilds_list=[{"id": str(g.id), "name": g.name} for g in bot.guilds]
+            guilds_list=guilds_list
         )
 
     except Exception as e:
@@ -165,25 +169,24 @@ async def on_ready():
     print(f"[STATUS] Terhubung ke {len(bot.guilds)} server Discord.")
     print("=" * 50)
 
-    # ── Load Cogs ──
+    # ===== FIX: Load cogs dari path absolut =====
+    cogs_dir = os.path.join(_project_root, "backend", "cogs")
     cog_count = 0
-    cogs_dir = os.path.join(_backend_dir, 'cogs')
-    
     for filename in os.listdir(cogs_dir):
-        if filename.endswith('.py') and filename not in ('__init__.py', 'firebase_setup.py'):
+        if filename.endswith(".py") and filename not in ("__init__.py", "firebase_setup.py"):
             try:
-                await bot.load_extension(f'backend.cogs.{filename[:-3]}')
+                await bot.load_extension(f"backend.cogs.{filename[:-3]}")
                 print(f"[COG] 📦 Loaded: {filename}")
                 cog_count += 1
             except Exception as e:
                 print(f"[COG] ❌ Failed to load {filename}: {e}")
+    # =============================================
 
     print(f"[COG] ✅ Total {cog_count} cogs loaded!")
 
     if not wavelink.Pool.nodes:
         print("[STATUS] 🎵 Music: Lavalink TIDAK terhubung.")
 
-    # ── Sync Slash Commands ──
     try:
         synced = await bot.tree.sync()
         print(f"[SYNC] ✅ {len(synced)} slash command(s) berhasil di-sync!")
@@ -192,7 +195,6 @@ async def on_ready():
     except Exception as e:
         print(f"[SYNC] ❌ Gagal sync commands: {e}")
 
-    # ── Start Background Loops ──
     if not lavalink_healthcheck.is_running():
         lavalink_healthcheck.start()
         print("[LAVALINK] 🔄 Health check loop aktif (60s).")
