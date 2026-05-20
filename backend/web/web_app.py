@@ -2,6 +2,7 @@ import os
 import threading
 import base64
 import requests
+import traceback  # ← TAMBAH: untuk log error detail
 from flask import Flask, render_template, jsonify, request, redirect
 from datetime import datetime, timezone
 
@@ -23,6 +24,9 @@ app = Flask(
     static_folder=os.path.join(_base_dir, "../../frontend/static"),
     template_folder=os.path.join(_base_dir, "../../frontend/templates")
 )
+
+# ← TAMBAH: Allow larger uploads (50MB) untuk base64 image
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 # ==========================================================
 # Shared stats (thread-safe) — di-write oleh bot, di-read oleh Flask
@@ -117,23 +121,23 @@ def _get_welcome_config(guild_id: str) -> dict:
     return {}
 
 # ==========================================================
-# Helper — Upload image ke Catbox.moe (free, no auth)
+# Helper — Upload image ke Catbox.moe (PERMANENT, free, no auth)
 # ==========================================================
 def _upload_to_catbox(file_data: bytes, filename: str) -> str | None:
     """
-    Upload file image ke Catbox.moe.
+    Upload file image ke Catbox.moe (PERMANENT).
     Returns: URL publik atau None jika gagal.
     """
     try:
-        # Catbox.moe API endpoint
-        url = "https://litterbox.catbox.moe/resources/internals/api.php"
+        # ← FIX: Gunakan endpoint PERMANENT (bukan litterbox temporary)
+        url = "https://catbox.moe/user/api.php"
 
         files = {
             'fileToUpload': (filename, file_data, 'image/png')
         }
         data = {
-            'reqtype': 'fileupload',
-            'time': '1h'  # Expiry: 1h, can be '1h', '12h', '24h', '72h'
+            'reqtype': 'fileupload'
+            # ← HAPUS: 'time' parameter karena permanent upload tidak butuh expiry
         }
 
         response = requests.post(url, files=files, data=data, timeout=30)
@@ -359,13 +363,13 @@ def save_welcome(guild_id: str):
         banner_font_color = request.form.get("banner_font_color", "#FFFFFF").strip()
 
         # ==========================================
-        # NEW: Handle file upload (drag-drop) via base64
+        # Handle file upload (drag-drop) via base64
         # ==========================================
         uploaded_file_data = request.form.get("uploaded_file_data", "").strip()
         uploaded_file_name = request.form.get("uploaded_file_name", "upload.png").strip()
-
-        # Determine which image field to upload based on style
         upload_target = request.form.get("upload_target", "").strip()
+
+        print(f"[WELCOME-WEB] 📥 Received upload_target={upload_target}, data_length={len(uploaded_file_data)}")
 
         if uploaded_file_data and uploaded_file_data.startswith("data:image"):
             try:
@@ -374,10 +378,12 @@ def save_welcome(guild_id: str):
                 file_bytes = base64.b64decode(base64_data)
 
                 print(f"[WELCOME-WEB] 📤 Uploading {len(file_bytes)} bytes to Catbox...")
-                catbox_url = _upload_to_catbox(file_bytes, uploaded_file_name)
+
+                # ← FIX: Gunakan filename yang lebih deskriptif
+                safe_filename = uploaded_file_name or "welcome_upload.png"
+                catbox_url = _upload_to_catbox(file_bytes, safe_filename)
 
                 if catbox_url:
-                    # Set the appropriate URL field based on upload target
                     if upload_target == "banner_bg":
                         banner_bg_url = catbox_url
                         print(f"[WELCOME-WEB] ✅ Banner BG uploaded: {catbox_url}")
@@ -388,7 +394,9 @@ def save_welcome(guild_id: str):
                     print("[WELCOME-WEB] ⚠️ Catbox upload failed, keeping existing URL")
 
             except Exception as e:
+                # ← FIX: Log full traceback untuk debugging
                 print(f"[WELCOME-WEB] ❌ Error processing upload: {e}")
+                traceback.print_exc()
 
         if not message_text:
             return jsonify({
@@ -431,7 +439,9 @@ def save_welcome(guild_id: str):
         }), 200
 
     except Exception as e:
+        # ← FIX: Log full traceback untuk debugging
         print(f"[WELCOME-WEB] ❌ Error saat menyimpan: {e}")
+        traceback.print_exc()
         return jsonify({
             "success": False,
             "message": f"❌ Terjadi kesalahan server: {str(e)}"
