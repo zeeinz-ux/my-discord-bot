@@ -1,14 +1,18 @@
 # =============================================================================
-# cogs/welcome.py — Hidden Hamlet Discord Bot v3.6
-# Modul  : Welcome Announcement (Join Message)
+# cogs/welcome.py — Hidden Hamlet Discord Bot v3.7
+# Modul  : Welcome Announcement (Join Message) — Dual Style: Embed + Banner
 # Author : zeeinz-ux
-# Features: Join + Rejoin support, Anti-spam cooldown, Default background image
+# Features: Embed style + Banner style (Pillow image generation), 
+#           Join + Rejoin support, Anti-spam cooldown, Default background image
 # =============================================================================
 
 import discord
 from discord.ext import commands
 import asyncio
 import time
+import io
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+import aiohttp
 
 # Import instance Firestore dari firebase_setup (sudah diinisiasi di main.py)
 from backend.cogs.firebase_setup import db
@@ -17,19 +21,27 @@ from backend.cogs.firebase_setup import db
 class WelcomeCog(commands.Cog, name="Welcome"):
     """
     Cog untuk mengirim pesan sambutan otomatis saat member bergabung.
+
+    Dua style tersedia:
+    1. "embed"   → Discord embed biasa (thumbnail + background image)
+    2. "banner"  → Generate image banner dengan Pillow (avatar + text overlay)
+
     Support: join pertama kali + rejoin (dengan anti-spam cooldown).
     Konfigurasi diambil real-time dari Firestore per guild_id.
     """
 
-    # Default background image URL (Logo HH)
+    # Default background image URL (Logo HH) — untuk embed style
     DEFAULT_BG_IMAGE = "https://raw.githubusercontent.com/zeeinz-ux/my-discord-bot/main/frontend/static/images/default-welcome-bg.png"
+
+    # Default banner background untuk banner style
+    DEFAULT_BANNER_BG = "https://raw.githubusercontent.com/zeeinz-ux/my-discord-bot/main/frontend/static/images/default-welcome-bg.png"
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         # Anti-spam: track last welcome per member per guild (cooldown 5 menit)
         self._last_welcome = {}  # key: "guild_id:user_id" → timestamp
         self._cooldown_seconds = 300  # 5 menit
-        print("[WELCOME] ✅ WelcomeCog berhasil dimuat.")
+        print("[WELCOME] ✅ WelcomeCog berhasil dimuat (v3.7 — Dual Style).")
 
     # ─────────────────────────────────────────────────────────────────────────
     # ANTI-SPAM HELPER
@@ -55,11 +67,13 @@ class WelcomeCog(commands.Cog, name="Welcome"):
         Placeholder yang didukung:
           {user}   → Mention langsung ke user (@Username)
           {server} → Nama server Discord
+          {count}  → Nomor member ke-berapa
         """
         return (
             text
             .replace("{user}", member.mention)
             .replace("{server}", member.guild.name)
+            .replace("{count}", str(member.guild.member_count))
         )
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -98,7 +112,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
                 print(f"[WELCOME] ℹ️ Welcome disabled untuk guild {guild_id}")
                 return None
 
-            print(f"[WELCOME] ✅ Config ditemukan untuk guild {guild_id}: enabled={welcome_cfg.get('enabled')}, channel_id={welcome_cfg.get('channel_id')}")
+            print(f"[WELCOME] ✅ Config ditemukan untuk guild {guild_id}: enabled={welcome_cfg.get('enabled')}, channel_id={welcome_cfg.get('channel_id')}, style={welcome_cfg.get('style', 'embed')}")
             return welcome_cfg
 
         except Exception as e:
@@ -148,15 +162,21 @@ class WelcomeCog(commands.Cog, name="Welcome"):
         # 3. Parse placeholder dalam teks pesan
         raw_text = cfg.get("message_text", "Selamat datang {user} di {server}! 🎉")
         parsed_text = self.parse_placeholders(raw_text, member)
+
+        # 4. Tentukan style (embed atau banner)
+        style = cfg.get("style", "embed")
         is_embed = cfg.get("is_embed", False)
 
         print(f"[WELCOME] 📝 Message text (raw): {raw_text}")
         print(f"[WELCOME] 📝 Message text (parsed): {parsed_text}")
-        print(f"[WELCOME] 🎨 is_embed: {is_embed}")
+        print(f"[WELCOME] 🎨 Style: {style}, is_embed: {is_embed}")
 
-        # 4. Kirim pesan (Embed atau plain text)
+        # 5. Kirim pesan sesuai style
         try:
-            if is_embed:
+            if style == "banner":
+                print(f"[WELCOME] 📤 Mengirim BANNER ke #{channel.name}...")
+                await self._send_banner(channel, member, cfg, parsed_text)
+            elif is_embed:
                 print(f"[WELCOME] 📤 Mengirim EMBED ke #{channel.name}...")
                 await self._send_embed(channel, member, cfg, parsed_text)
             else:
@@ -215,13 +235,225 @@ class WelcomeCog(commands.Cog, name="Welcome"):
             return
 
     # ─────────────────────────────────────────────────────────────────────────
-    # FALLBACK: on_guild_member_add (alternative event, some cases catch this but not on_member_join)
+    # FALLBACK: on_guild_member_add (alternative event)
     # ─────────────────────────────────────────────────────────────────────────
     @commands.Cog.listener()
     async def on_guild_member_add(self, member: discord.Member):
         """Alternative event listener (backup untuk on_member_join)."""
         print(f"[WELCOME] 📥 on_guild_member_add event: {member.name} added to {member.guild.name}")
         await self._send_welcome(member)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # HELPER: Download image dari URL ke bytes (async)
+    # ─────────────────────────────────────────────────────────────────────────
+    async def _download_image(self, url: str) -> bytes | None:
+        """Download image dari URL, return bytes atau None jika gagal."""
+        if not url:
+            return None
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        return await resp.read()
+                    else:
+                        print(f"[WELCOME] ⚠️ Download image failed: HTTP {resp.status} for {url}")
+                        return None
+        except Exception as e:
+            print(f"[WELCOME] ⚠️ Download image error: {e}")
+            return None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # HELPER: Generate banner image dengan Pillow
+    # ─────────────────────────────────────────────────────────────────────────
+    async def _generate_banner_image(
+        self,
+        member: discord.Member,
+        cfg: dict
+    ) -> discord.File | None:
+        """
+        Generate welcome banner image menggunakan Pillow.
+
+        Layout Koya-style:
+        - Background image (config atau default)
+        - Avatar user di tengah (lingkaran, border putih)
+        - Text overlay: "WELCOME" + username
+        - Subtext kustom dari config
+
+        Returns:
+            discord.File yang siap di-attach, atau None jika gagal.
+        """
+        try:
+            # 1. Download background image
+            bg_url = cfg.get("banner_bg_url", "").strip()
+            if not bg_url:
+                bg_url = self.DEFAULT_BANNER_BG
+
+            bg_bytes = await self._download_image(bg_url)
+            if bg_bytes:
+                bg_img = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
+            else:
+                # Fallback: buat gradient background
+                bg_img = Image.new("RGBA", (1200, 500), (15, 15, 35, 255))
+                draw = ImageDraw.Draw(bg_img)
+                for y in range(500):
+                    r = int(15 + (y / 500) * 30)
+                    g = int(15 + (y / 500) * 20)
+                    b = int(35 + (y / 500) * 40)
+                    draw.line([(0, y), (1200, y)], fill=(r, g, b, 255))
+
+            # Resize ke ukuran banner (1200x500)
+            bg_img = bg_img.resize((1200, 500), Image.LANCZOS)
+
+            # 2. Apply dark overlay untuk readability
+            overlay = Image.new("RGBA", (1200, 500), (0, 0, 0, 120))
+            bg_img = Image.alpha_composite(bg_img, overlay)
+
+            # 3. Download avatar user
+            avatar_url = str(member.display_avatar.url)
+            avatar_bytes = await self._download_image(avatar_url)
+
+            if avatar_bytes:
+                avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+            else:
+                # Fallback avatar
+                avatar_img = Image.new("RGBA", (256, 256), (88, 101, 242, 255))
+                draw_av = ImageDraw.Draw(avatar_img)
+                draw_av.ellipse([0, 0, 256, 256], fill=(88, 101, 242, 255))
+
+            # 4. Create circular avatar with white border
+            avatar_size = 200
+            avatar_img = avatar_img.resize((avatar_size, avatar_size), Image.LANCZOS)
+
+            # Create circular mask
+            mask = Image.new("L", (avatar_size, avatar_size), 0)
+            mask_draw = ImageDraw.Draw(mask)
+            mask_draw.ellipse([0, 0, avatar_size, avatar_size], fill=255)
+
+            # Create avatar with ring
+            ring_size = avatar_size + 20
+            ring_img = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
+            ring_draw = ImageDraw.Draw(ring_img)
+
+            # Draw white ring
+            ring_color = (255, 255, 255, 255)
+            if cfg.get("banner_avatar_ring", True):
+                ring_draw.ellipse([0, 0, ring_size, ring_size], fill=ring_color)
+
+            # Paste avatar in center of ring
+            avatar_pos = (10, 10)
+            ring_img.paste(avatar_img, avatar_pos, mask)
+
+            # 5. Paste avatar ke banner (center horizontally, slightly above center)
+            avatar_x = (1200 - ring_size) // 2
+            avatar_y = 120
+            bg_img.paste(ring_img, (avatar_x, avatar_y), ring_img)
+
+            # 6. Add text overlay
+            draw = ImageDraw.Draw(bg_img)
+
+            # Try to load fonts, fallback to default
+            try:
+                font_welcome = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 72)
+                font_name = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 56)
+                font_sub = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
+            except:
+                try:
+                    font_welcome = ImageFont.truetype("arial.ttf", 72)
+                    font_name = ImageFont.truetype("arial.ttf", 56)
+                    font_sub = ImageFont.truetype("arial.ttf", 28)
+                except:
+                    font_welcome = ImageFont.load_default()
+                    font_name = font_welcome
+                    font_sub = font_welcome
+
+            # Text colors
+            font_color_hex = cfg.get("banner_font_color", "#FFFFFF").lstrip("#")
+            try:
+                font_color = tuple(int(font_color_hex[i:i+2], 16) for i in (0, 2, 4)) + (255,)
+            except:
+                font_color = (255, 255, 255, 255)
+
+            shadow_color = (0, 0, 0, 180)
+
+            # "WELCOME" text
+            welcome_text = cfg.get("banner_text", "WELCOME").upper()
+
+            # Calculate text positions
+            def get_text_size(draw, text, font):
+                bbox = draw.textbbox((0, 0), text, font=font)
+                return bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+            w_w, h_w = get_text_size(draw, welcome_text, font_welcome)
+            x_w = (1200 - w_w) // 2
+            y_w = avatar_y + ring_size + 30
+
+            # Draw shadow then text
+            draw.text((x_w + 3, y_w + 3), welcome_text, font=font_welcome, fill=shadow_color)
+            draw.text((x_w, y_w), welcome_text, font=font_welcome, fill=font_color)
+
+            # Username text
+            username = member.name.upper()
+            w_n, h_n = get_text_size(draw, username, font_name)
+            x_n = (1200 - w_n) // 2
+            y_n = y_w + h_w + 10
+
+            draw.text((x_n + 2, y_n + 2), username, font=font_name, fill=shadow_color)
+            draw.text((x_n, y_n), username, font=font_name, fill=font_color)
+
+            # Subtext (custom message)
+            subtext = cfg.get("banner_subtext", f"Member ke-{member.guild.member_count} • {member.guild.name}")
+            subtext = subtext.replace("{count}", str(member.guild.member_count)).replace("{server}", member.guild.name)
+            w_s, h_s = get_text_size(draw, subtext, font_sub)
+            x_s = (1200 - w_s) // 2
+            y_s = y_n + h_n + 20
+
+            draw.text((x_s + 1, y_s + 1), subtext, font=font_sub, fill=shadow_color)
+            draw.text((x_s, y_s), subtext, font=font_sub, fill=(255, 255, 255, 200))
+
+            # 7. Convert to bytes and create discord.File
+            output = io.BytesIO()
+            bg_img = bg_img.convert("RGB")
+            bg_img.save(output, format="PNG", optimize=True)
+            output.seek(0)
+
+            file = discord.File(output, filename=f"welcome_{member.id}.png")
+            print(f"[WELCOME] 🎨 Banner image generated for {member.name}")
+            return file
+
+        except Exception as e:
+            print(f"[WELCOME] ❌ Error generating banner: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # HELPER: Kirim sebagai Banner Image (Koya-style)
+    # ─────────────────────────────────────────────────────────────────────────
+    async def _send_banner(
+        self,
+        channel: discord.TextChannel,
+        member: discord.Member,
+        cfg: dict,
+        parsed_text: str
+    ):
+        """
+        Kirim pesan sambutan dalam format banner image (Koya-style).
+
+        - Generate image banner dengan Pillow
+        - Upload sebagai file attachment ke Discord
+        - Mention user di content
+        """
+        # Generate banner image
+        banner_file = await self._generate_banner_image(member, cfg)
+
+        if banner_file:
+            # Send with image attachment + mention
+            await channel.send(content=member.mention, file=banner_file)
+            print(f"[WELCOME] 📤 Banner image sent to #{channel.name}")
+        else:
+            # Fallback ke embed kalau banner gagal generate
+            print("[WELCOME] ⚠️ Banner generation failed, falling back to embed...")
+            await self._send_embed(channel, member, cfg, parsed_text)
 
     # ─────────────────────────────────────────────────────────────────────────
     # HELPER: Kirim sebagai discord.Embed
