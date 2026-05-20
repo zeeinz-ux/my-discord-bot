@@ -173,7 +173,7 @@ def dashboard_guild(guild_id: str):
 @app.route("/dashboard/<guild_id>/settings")
 def settings_page(guild_id: str):
     """Placeholder: Settings."""
-    return _render_page("dashboard.html", active_page="settings", guild_id=guild_id)
+    return _render_page("settings.html", active_page="settings", guild_id=guild_id)
 
 # ==========================================================
 # ROUTES — Music
@@ -192,14 +192,6 @@ def music_queue(guild_id: str):
 def music_playlists(guild_id: str):
     """Placeholder: Playlists."""
     return _render_page("music_settings.html", active_page="playlists", guild_id=guild_id)
-
-# ==========================================================
-# ROUTES — Spotify
-# ==========================================================
-@app.route("/dashboard/<guild_id>/spotify")
-def spotify_settings(guild_id: str):
-    """Placeholder: Spotify Downloader."""
-    return _render_page("spotify_settings.html", active_page="spotify", guild_id=guild_id)
 
 # ==========================================================
 # ROUTES — Welcome / Announcements
@@ -277,22 +269,27 @@ def donation_stats(guild_id: str):
 @app.route("/dashboard/<guild_id>/message-builder")
 def message_builder(guild_id: str):
     """Placeholder: Message Builder."""
-    return _render_page("dashboard.html", active_page="message_builder", guild_id=guild_id)
+    return _render_page("message_builder.html", active_page="message_builder", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/templates")
 def templates_page(guild_id: str):
     """Placeholder: Templates."""
-    return _render_page("dashboard.html", active_page="templates", guild_id=guild_id)
+    return _render_page("templates.html", active_page="templates", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/actions")
 def actions_page(guild_id: str):
     """Placeholder: Actions."""
-    return _render_page("dashboard.html", active_page="actions", guild_id=guild_id)
+    return _render_page("actions.html", active_page="actions", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/auto-responders")
 def auto_responders(guild_id: str):
     """Placeholder: Auto Responders."""
-    return _render_page("dashboard.html", active_page="auto_responders", guild_id=guild_id)
+    return _render_page("auto_responders.html", active_page="auto_responders", guild_id=guild_id)
+
+@app.route("/dashboard/<guild_id>/ai-chat")
+def ai_chat_page(guild_id: str):
+    """Placeholder: AI Chat."""
+    return _render_page("ai_chat.html", active_page="ai_chat", guild_id=guild_id)
 
 # ==========================================================
 # ROUTES — Welcome Save (POST, JSON response)
