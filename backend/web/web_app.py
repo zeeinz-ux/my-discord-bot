@@ -209,7 +209,14 @@ def welcome_settings(guild_id: str):
         "is_embed": False,
         "embed_color": "#5865F2",
         "embed_title": "👋 Selamat Datang!",
-        "bg_image_url": ""
+        "bg_image_url": "",
+        # NEW: Banner style fields (v3.7)
+        "style": "embed",           # "embed" or "banner"
+        "banner_bg_url": "",        # Banner background image URL
+        "banner_text": "WELCOME",   # Main text overlay (e.g., "WELCOME")
+        "banner_subtext": "Member ke-{count} • {server}",  # Subtext below username
+        "banner_font_color": "#FFFFFF",  # Text color for banner
+        "banner_avatar_ring": True,      # White ring around avatar
     }
 
     config = {**defaults, **current_config}
@@ -307,11 +314,21 @@ def save_welcome(guild_id: str):
         enabled = "enabled" in request.form
         is_embed = "is_embed" in request.form
 
+        # NEW v3.7: Banner style fields
+        style = request.form.get("style", "embed").strip()
+        banner_avatar_ring = "banner_avatar_ring" in request.form
+
         channel_id = request.form.get("channel_id", "").strip()
         message_text = request.form.get("message_text", "").strip()
         embed_color = request.form.get("embed_color", "#5865F2").strip()
         embed_title = request.form.get("embed_title", "").strip()
         bg_image_url = request.form.get("bg_image_url", "").strip()
+
+        # Banner fields
+        banner_bg_url = request.form.get("banner_bg_url", "").strip()
+        banner_text = request.form.get("banner_text", "WELCOME").strip()
+        banner_subtext = request.form.get("banner_subtext", "Member ke-{count} • {server}").strip()
+        banner_font_color = request.form.get("banner_font_color", "#FFFFFF").strip()
 
         if not message_text:
             return jsonify({
@@ -322,6 +339,9 @@ def save_welcome(guild_id: str):
         if embed_color and not embed_color.startswith("#"):
             embed_color = f"#{embed_color}"
 
+        if banner_font_color and not banner_font_color.startswith("#"):
+            banner_font_color = f"#{banner_font_color}"
+
         payload = {
             "welcome": {
                 "enabled": enabled,
@@ -330,7 +350,14 @@ def save_welcome(guild_id: str):
                 "is_embed": is_embed,
                 "embed_color": embed_color,
                 "embed_title": embed_title,
-                "bg_image_url": bg_image_url
+                "bg_image_url": bg_image_url,
+                # NEW v3.7
+                "style": style,
+                "banner_bg_url": banner_bg_url,
+                "banner_text": banner_text,
+                "banner_subtext": banner_subtext,
+                "banner_font_color": banner_font_color,
+                "banner_avatar_ring": banner_avatar_ring,
             }
         }
 
@@ -338,7 +365,7 @@ def save_welcome(guild_id: str):
             payload, merge=True
         )
 
-        print(f"[WELCOME-WEB] ✅ Config tersimpan untuk guild {guild_id}")
+        print(f"[WELCOME-WEB] ✅ Config tersimpan untuk guild {guild_id} (style={style})")
         return jsonify({
             "success": True,
             "message": "✅ Pengaturan Welcome berhasil disimpan!"
