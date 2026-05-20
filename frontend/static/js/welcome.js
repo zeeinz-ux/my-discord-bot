@@ -1,7 +1,7 @@
 /**
- * welcome.js — Hidden Hamlet Welcome Settings Form Logic v3.7.1
+ * welcome.js — Hidden Hamlet Welcome Settings Form Logic v3.7.2
  * Features: style toggle (embed/banner), color picker sync, live preview,
- *           drag & drop upload with Catbox hosting, banner preview, form submit
+ *           drag & drop upload with Catbox hosting + IMAGE RESIZE, banner preview, form submit
  */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -58,6 +58,43 @@ document.addEventListener("DOMContentLoaded", () => {
   let uploadedFileData = "";
   let uploadedFileName = "";
   let uploadTarget = ""; // "embed_bg" or "banner_bg"
+
+  // ── 0. Image Resize Helper (NEW v3.7.2) ──
+  function resizeImage(file, maxWidth = 1200, quality = 0.85) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const reader = new FileReader();
+
+      reader.onload = (e) => {
+        img.src = e.target.result;
+      };
+      reader.onerror = (err) => reject(err);
+
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Convert to JPEG for smaller size
+        const resizedBase64 = canvas.toDataURL("image/jpeg", quality);
+        console.log(`[WELCOME] 🖼️ Resized: ${img.width}x${img.height} → ${width}x${height}, base64 length: ${resizedBase64.length}`);
+        resolve(resizedBase64);
+      };
+
+      img.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  }
 
   // ── 1. Style Selector Toggle ──
   function setActiveStyle(style) {
@@ -317,23 +354,47 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
+    // ← FIX v3.7.2: Resize image via Canvas sebelum simpan base64
     function previewFile(file) {
+      // 1. Baca asli untuk preview
       const reader = new FileReader();
       reader.readAsDataURL(file);
       reader.onloadend = function () {
-        const base64 = reader.result;
+        const originalBase64 = reader.result;
 
+        // Tampilkan preview asli (biar user lihat)
         if (previewImg) {
-          previewImg.src = base64;
+          previewImg.src = originalBase64;
         }
         if (preview) {
           preview.classList.add("active");
         }
         zone.classList.add("has-file");
 
-        if (onPreview) onPreview(base64, file.name);
+        // 2. Resize untuk upload (kecilkan base64 yang dikirim ke backend)
+        resizeImage(file, 1200, 0.85)
+          .then((resizedBase64) => {
+            // Simpan yang resized untuk dikirim ke backend
+            uploadedFileData = resizedBase64;
+            uploadedFileName = file.name;
+            uploadTarget = (zone.id === "bannerUploadZone") ? "banner_bg" : "embed_bg";
 
-        showToast("📤 Gambar dipilih. Akan di-upload saat simpan.", "success");
+            // ← FIX: Sync ke hidden inputs juga
+            const hiddenData = document.getElementById("uploaded_file_data");
+            const hiddenName = document.getElementById("uploaded_file_name");
+            const hiddenTarget = document.getElementById("upload_target");
+            if (hiddenData) hiddenData.value = resizedBase64;
+            if (hiddenName) hiddenName.value = file.name;
+            if (hiddenTarget) hiddenTarget.value = uploadTarget;
+
+            if (onPreview) onPreview(resizedBase64, file.name);
+
+            showToast("📤 Gambar dipilih. Akan di-upload saat simpan.", "success");
+          })
+          .catch((err) => {
+            console.error("[WELCOME] ❌ Error resizing image:", err);
+            showToast("❌ Gagal memproses gambar.", "error");
+          });
       };
     }
 
@@ -356,6 +417,14 @@ document.addEventListener("DOMContentLoaded", () => {
         uploadedFileData = "";
         uploadedFileName = "";
         uploadTarget = "";
+
+        // ← FIX: Clear hidden inputs juga
+        const hiddenData = document.getElementById("uploaded_file_data");
+        const hiddenName = document.getElementById("uploaded_file_name");
+        const hiddenTarget = document.getElementById("upload_target");
+        if (hiddenData) hiddenData.value = "";
+        if (hiddenName) hiddenName.value = "";
+        if (hiddenTarget) hiddenTarget.value = "";
 
         if (onPreview) onPreview(null, "");
       });
@@ -417,11 +486,12 @@ document.addEventListener("DOMContentLoaded", () => {
       // Build FormData with file upload info
       const formData = new FormData(this);
 
-      // Add uploaded file data if exists
+      // ← FIX v3.7.2: Pastikan hidden input values sudah sync ke FormData
+      // (FormData otomatis ambil dari form elements, tapi kita append juga sebagai backup)
       if (uploadedFileData) {
-        formData.append("uploaded_file_data", uploadedFileData);
-        formData.append("uploaded_file_name", uploadedFileName || "upload.png");
-        formData.append("upload_target", uploadTarget);
+        formData.set("uploaded_file_data", uploadedFileData);
+        formData.set("uploaded_file_name", uploadedFileName || "upload.png");
+        formData.set("upload_target", uploadTarget);
       }
 
       // Loading state
@@ -464,5 +534,5 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  console.log("[WELCOME] ✅ Welcome JS v3.7.1 loaded — Catbox Upload Support");
+  console.log("[WELCOME] ✅ Welcome JS v3.7.2 loaded — Image Resize + Catbox Upload");
 });
