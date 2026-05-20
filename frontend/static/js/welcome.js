@@ -1,6 +1,6 @@
 /**
- * welcome.js — Hidden Hamlet Welcome Settings Form Logic
- * Features: toggle embed panel, color picker sync, live preview,
+ * welcome.js — Hidden Hamlet Welcome Settings Form Logic v3.7
+ * Features: style toggle (embed/banner), color picker sync, live preview,
  *           drag & drop upload, banner preview, form submit
  */
 
@@ -14,32 +14,98 @@ document.addEventListener("DOMContentLoaded", () => {
   const colorPicker = document.getElementById("embed_color");
   const colorHexInput = document.getElementById("embed_color_text");
   const embedTitleInput = document.getElementById("embed_title");
-  const previewTitle = document.getElementById("previewTitle");
+  const embedPreviewTitle = document.getElementById("embedPreviewTitle");
+  const embedPreviewBar = document.getElementById("embedPreviewBar");
   const welcomeForm = document.getElementById("welcomeForm");
   const btnSave = document.getElementById("btnSave");
   const toast = document.getElementById("toast");
 
-  // Banner preview elements
-  const bgImageUrlInput = document.getElementById("bg_image_url");
-  const bannerImage = document.getElementById("bannerImage");
-  const bannerPreview = document.getElementById("bannerPreview");
-  const previewMessage = document.getElementById("previewMessage");
+  // Style selector elements (NEW v3.7)
+  const styleSelector = document.getElementById("styleSelector");
+  const embedSettingsCard = document.getElementById("embedSettingsCard");
+  const bannerSettingsCard = document.getElementById("bannerSettingsCard");
 
-  // Upload zone elements
+  // Banner elements (NEW v3.7)
+  const bannerTextInput = document.getElementById("banner_text");
+  const bannerSubtextInput = document.getElementById("banner_subtext");
+  const bannerFontColorPicker = document.getElementById("banner_font_color");
+  const bannerFontColorHex = document.getElementById("banner_font_color_text");
+  const toggleAvatarRing = document.getElementById("toggleAvatarRing");
+  const koyaBannerTitle = document.getElementById("koyaBannerTitle");
+  const koyaBannerName = document.getElementById("koyaBannerName");
+  const koyaBannerSub = document.getElementById("koyaBannerSub");
+  const koyaAvatarRing = document.getElementById("koyaAvatarRing");
+  const koyaBannerBg = document.getElementById("koyaBannerBg");
+  const bannerBgUrlInput = document.getElementById("banner_bg_url");
+
+  // Banner upload elements (NEW v3.7)
+  const bannerUploadZone = document.getElementById("bannerUploadZone");
+  const bannerFileInput = document.getElementById("bannerFileInput");
+  const bannerUploadPreview = document.getElementById("bannerUploadPreview");
+  const bannerUploadPreviewImg = document.getElementById(
+    "bannerUploadPreviewImg",
+  );
+  const bannerUploadRemove = document.getElementById("bannerUploadRemove");
+
+  // Embed upload elements
   const uploadZone = document.getElementById("uploadZone");
   const fileInput = document.getElementById("fileInput");
   const uploadPreview = document.getElementById("uploadPreview");
   const uploadPreviewImg = document.getElementById("uploadPreviewImg");
   const uploadRemove = document.getElementById("uploadRemove");
 
-  // ── 1. Embed Panel Toggle ──
+  // ── 1. Style Selector Toggle (NEW v3.7) ──
+  function setActiveStyle(style) {
+    // Update radio buttons
+    document
+      .querySelectorAll('.style-option input[name="style"]')
+      .forEach((radio) => {
+        radio.checked = radio.value === style;
+      });
+
+    // Update visual active state
+    document.querySelectorAll(".style-option").forEach((opt) => {
+      opt.classList.toggle("active", opt.dataset.style === style);
+    });
+
+    // Show/hide settings cards
+    if (embedSettingsCard) {
+      embedSettingsCard.classList.toggle("visible", style === "embed");
+    }
+    if (bannerSettingsCard) {
+      bannerSettingsCard.classList.toggle("visible", style === "banner");
+    }
+
+    console.log(`[WELCOME] 🎨 Style switched to: ${style}`);
+  }
+
+  if (styleSelector) {
+    document.querySelectorAll(".style-option").forEach((option) => {
+      option.addEventListener("click", () => {
+        const style = option.dataset.style;
+        setActiveStyle(style);
+      });
+    });
+
+    // Init: set initial active style
+    const initialStyleRadio = document.querySelector(
+      '.style-option input[name="style"]:checked',
+    );
+    if (initialStyleRadio) {
+      setActiveStyle(initialStyleRadio.value);
+    } else {
+      setActiveStyle("embed");
+    }
+  }
+
+  // ── 2. Embed Panel Toggle ──
   if (toggleEmbed && embedPanel) {
     toggleEmbed.addEventListener("change", function () {
       embedPanel.classList.toggle("open", this.checked);
     });
   }
 
-  // ── 2. Status Banner Toggle ──
+  // ── 3. Status Banner Toggle ──
   if (toggleEnabled && statusBanner && statusText) {
     toggleEnabled.addEventListener("change", function () {
       if (this.checked) {
@@ -53,8 +119,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // ── 3. Color Picker Sync ──
-  function applyColor(hex) {
+  // ── 4. Color Picker Sync (Embed) ──
+  function applyEmbedColor(hex) {
     document.documentElement.style.setProperty("--welcome-accent", hex);
     if (document.activeElement !== colorPicker && colorPicker) {
       colorPicker.value = hex;
@@ -62,11 +128,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (document.activeElement !== colorHexInput && colorHexInput) {
       colorHexInput.value = hex;
     }
+    if (embedPreviewBar) {
+      embedPreviewBar.style.background = hex;
+    }
   }
 
   if (colorPicker) {
     colorPicker.addEventListener("input", function () {
-      applyColor(this.value);
+      applyEmbedColor(this.value);
     });
   }
 
@@ -74,40 +143,130 @@ document.addEventListener("DOMContentLoaded", () => {
     colorHexInput.addEventListener("input", function () {
       const v = this.value.startsWith("#") ? this.value : "#" + this.value;
       if (/^#[0-9A-Fa-f]{6}$/.test(v)) {
-        applyColor(v);
+        applyEmbedColor(v);
       }
     });
   }
 
-  // ── 4. Live Preview Title ──
-  if (embedTitleInput && previewTitle) {
-    embedTitleInput.addEventListener("input", function () {
-      previewTitle.textContent = this.value.trim() || "👋 Selamat Datang!";
-    });
-  }
-
-  // ── 5. Banner Preview Sync ──
-  function updateBannerPreview(url) {
-    if (bannerImage && url) {
-      bannerImage.src = url;
-      bannerImage.style.display = "block";
-    } else if (bannerImage) {
-      bannerImage.src = "/static/images/default-welcome-bg.png";
+  // ── 5. Banner Font Color Sync (NEW v3.7) ──
+  function applyBannerColor(hex) {
+    document.documentElement.style.setProperty("--banner-font-color", hex);
+    if (
+      document.activeElement !== bannerFontColorPicker &&
+      bannerFontColorPicker
+    ) {
+      bannerFontColorPicker.value = hex;
+    }
+    if (document.activeElement !== bannerFontColorHex && bannerFontColorHex) {
+      bannerFontColorHex.value = hex;
     }
   }
 
-  // Sync URL input → banner preview
-  if (bgImageUrlInput && bannerImage) {
-    bgImageUrlInput.addEventListener("input", function () {
-      updateBannerPreview(this.value.trim());
+  if (bannerFontColorPicker) {
+    bannerFontColorPicker.addEventListener("input", function () {
+      applyBannerColor(this.value);
     });
   }
 
-  // ── 6. Drag & Drop Upload ──
-  if (uploadZone && fileInput) {
+  if (bannerFontColorHex) {
+    bannerFontColorHex.addEventListener("input", function () {
+      const v = this.value.startsWith("#") ? this.value : "#" + this.value;
+      if (/^#[0-9A-Fa-f]{6}$/.test(v)) {
+        applyBannerColor(v);
+      }
+    });
+  }
+
+  // ── 6. Live Preview Title (Embed) ──
+  if (embedTitleInput && embedPreviewTitle) {
+    embedTitleInput.addEventListener("input", function () {
+      embedPreviewTitle.textContent = this.value.trim() || "👋 Selamat Datang!";
+    });
+  }
+
+  // ── 7. Banner Text Live Preview (NEW v3.7) ──
+  if (bannerTextInput && koyaBannerTitle) {
+    bannerTextInput.addEventListener("input", function () {
+      koyaBannerTitle.textContent = (
+        this.value.trim() || "WELCOME"
+      ).toUpperCase();
+    });
+  }
+
+  if (bannerSubtextInput && koyaBannerSub) {
+    bannerSubtextInput.addEventListener("input", function () {
+      const val = this.value.trim() || "Member ke-171 • Hidden Hamlet";
+      koyaBannerSub.textContent = val
+        .replace("{count}", "171")
+        .replace("{server}", "Hidden Hamlet");
+    });
+  }
+
+  // ── 8. Avatar Ring Toggle (NEW v3.7) ──
+  if (toggleAvatarRing && koyaAvatarRing) {
+    toggleAvatarRing.addEventListener("change", function () {
+      koyaAvatarRing.classList.toggle("hidden", !this.checked);
+    });
+  }
+
+  // ── 9. Banner Background Preview (NEW v3.7) ──
+  function updateBannerBgPreview(url) {
+    if (koyaBannerBg && url) {
+      koyaBannerBg.style.backgroundImage = `url(${url})`;
+      koyaBannerBg.classList.remove("no-image");
+    } else if (koyaBannerBg) {
+      koyaBannerBg.style.backgroundImage = "";
+      koyaBannerBg.classList.add("no-image");
+    }
+  }
+
+  if (bannerBgUrlInput) {
+    bannerBgUrlInput.addEventListener("input", function () {
+      updateBannerBgPreview(this.value.trim());
+    });
+  }
+
+  // ── 10. Drag & Drop Upload (Embed) ──
+  setupUploadZone(
+    uploadZone,
+    fileInput,
+    uploadPreview,
+    uploadPreviewImg,
+    uploadRemove,
+    (base64) => {
+      // For embed: update banner preview with base64
+      console.log("[WELCOME] 📤 Embed file selected (base64 preview)");
+    },
+  );
+
+  // ── 11. Drag & Drop Upload (Banner) (NEW v3.7) ──
+  setupUploadZone(
+    bannerUploadZone,
+    bannerFileInput,
+    bannerUploadPreview,
+    bannerUploadPreviewImg,
+    bannerUploadRemove,
+    (base64) => {
+      // For banner: update background preview
+      updateBannerBgPreview(base64);
+      console.log("[WELCOME] 📤 Banner file selected (base64 preview)");
+    },
+  );
+
+  // ── Upload Zone Setup Helper ──
+  function setupUploadZone(
+    zone,
+    input,
+    preview,
+    previewImg,
+    removeBtn,
+    onPreview,
+  ) {
+    if (!zone || !input) return;
+
     // Prevent default drag behaviors
     ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
-      uploadZone.addEventListener(eventName, preventDefaults, false);
+      zone.addEventListener(eventName, preventDefaults, false);
       document.body.addEventListener(eventName, preventDefaults, false);
     });
 
@@ -118,23 +277,23 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Highlight drop zone on drag
     ["dragenter", "dragover"].forEach((eventName) => {
-      uploadZone.addEventListener(eventName, highlight, false);
+      zone.addEventListener(eventName, highlight, false);
     });
 
     ["dragleave", "drop"].forEach((eventName) => {
-      uploadZone.addEventListener(eventName, unhighlight, false);
+      zone.addEventListener(eventName, unhighlight, false);
     });
 
     function highlight() {
-      uploadZone.classList.add("dragover");
+      zone.classList.add("dragover");
     }
 
     function unhighlight() {
-      uploadZone.classList.remove("dragover");
+      zone.classList.remove("dragover");
     }
 
     // Handle dropped files
-    uploadZone.addEventListener("drop", handleDrop, false);
+    zone.addEventListener("drop", handleDrop, false);
 
     function handleDrop(e) {
       const dt = e.dataTransfer;
@@ -143,7 +302,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Handle file input change
-    fileInput.addEventListener("change", function () {
+    input.addEventListener("change", function () {
       handleFiles(this.files);
     });
 
@@ -169,19 +328,17 @@ document.addEventListener("DOMContentLoaded", () => {
         const base64 = reader.result;
 
         // Show preview in upload zone
-        if (uploadPreviewImg) {
-          uploadPreviewImg.src = base64;
+        if (previewImg) {
+          previewImg.src = base64;
         }
-        if (uploadPreview) {
-          uploadPreview.classList.add("active");
+        if (preview) {
+          preview.classList.add("active");
         }
-        uploadZone.classList.add("has-file");
+        zone.classList.add("has-file");
 
-        // Update banner preview
-        updateBannerPreview(base64);
+        // Callback
+        if (onPreview) onPreview(base64);
 
-        // Note: Base64 images won't work in Discord embed (too large)
-        // User should upload to hosting and paste URL, or we need server-side upload
         console.log(
           "[WELCOME] 📤 File selected (base64 preview only — upload to hosting for Discord)",
         );
@@ -189,32 +346,29 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Remove uploaded file
-    if (uploadRemove) {
-      uploadRemove.addEventListener("click", function (e) {
+    if (removeBtn) {
+      removeBtn.addEventListener("click", function (e) {
         e.preventDefault();
         e.stopPropagation();
 
-        if (uploadPreview) {
-          uploadPreview.classList.remove("active");
+        if (preview) {
+          preview.classList.remove("active");
         }
-        if (uploadPreviewImg) {
-          uploadPreviewImg.src = "";
+        if (previewImg) {
+          previewImg.src = "";
         }
-        if (fileInput) {
-          fileInput.value = "";
+        if (input) {
+          input.value = "";
         }
-        uploadZone.classList.remove("has-file");
+        zone.classList.remove("has-file");
 
-        // Reset banner to URL or default
-        const urlValue = bgImageUrlInput ? bgImageUrlInput.value.trim() : "";
-        updateBannerPreview(
-          urlValue || "/static/images/default-welcome-bg.png",
-        );
+        // Reset preview
+        if (onPreview) onPreview(null);
       });
     }
   }
 
-  // ── 7. Toast Notification ──
+  // ── 12. Toast Notification ──
   function showToast(msg, type = "success") {
     if (!toast) return;
     document.getElementById("toastMsg").textContent = msg;
@@ -225,16 +379,24 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => toast.classList.remove("show"), 4000);
   }
 
-  // ── 8. Form Submit ──
+  // ── 13. Form Submit ──
   if (welcomeForm) {
     welcomeForm.addEventListener("submit", async function (e) {
       e.preventDefault();
 
-      // Sync hex input ke color picker sebelum submit
+      // Sync hex inputs ke color pickers sebelum submit
       if (colorHexInput && colorPicker) {
         const hexVal = colorHexInput.value;
         if (/^#?[0-9A-Fa-f]{6}$/.test(hexVal)) {
           colorPicker.value = hexVal.startsWith("#") ? hexVal : "#" + hexVal;
+        }
+      }
+      if (bannerFontColorHex && bannerFontColorPicker) {
+        const hexVal = bannerFontColorHex.value;
+        if (/^#?[0-9A-Fa-f]{6}$/.test(hexVal)) {
+          bannerFontColorPicker.value = hexVal.startsWith("#")
+            ? hexVal
+            : "#" + hexVal;
         }
       }
 
@@ -287,5 +449,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  console.log("[WELCOME] ✅ Welcome JS loaded and initialized");
+  console.log(
+    "[WELCOME] ✅ Welcome JS v3.7 loaded — Dual Style (Embed + Banner)",
+  );
 });
