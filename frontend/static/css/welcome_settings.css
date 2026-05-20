@@ -12,8 +12,8 @@
 
 /* ── Layout ─────────────────────────────────────────── */
 .page-wrap {
-  max-width: 720px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: 100%;
   padding: 2rem 1.5rem 5rem;
 }
 
