@@ -1,10 +1,11 @@
 import os
 import threading
 import base64
-import requests
-import traceback  # ← TAMBAH: untuk log error detail
+import traceback
+import io
 from flask import Flask, render_template, jsonify, request, redirect
 from datetime import datetime, timezone
+from PIL import Image  # ← TAMBAH: untuk auto-compress
 
 # ==========================================================
 # Import relative dari dalam backend/ folder
@@ -25,11 +26,10 @@ app = Flask(
     template_folder=os.path.join(_base_dir, "../../frontend/templates")
 )
 
-# ← TAMBAH: Allow larger uploads (50MB) untuk base64 image
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 # ==========================================================
-# Shared stats (thread-safe) — di-write oleh bot, di-read oleh Flask
+# Shared stats (thread-safe)
 # ==========================================================
 _stats_lock = threading.Lock()
 _bot_stats = {
@@ -46,13 +46,11 @@ _bot_stats = {
 }
 
 def set_stats(**kwargs):
-    """Dipanggil dari main.py (bot thread) untuk update stats."""
     with _stats_lock:
         _bot_stats.update(kwargs)
         _bot_stats["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 def get_stats_snapshot():
-    """Dipanggil dari Flask routes untuk baca stats (thread-safe)."""
     with _stats_lock:
         raw = dict(_bot_stats)
 
@@ -94,20 +92,17 @@ _guild_lock = threading.Lock()
 _guild_channels: dict = {}
 
 def set_guild_channels(guild_id: str, channels: list):
-    """Simpan daftar text channel yang bot punya izin kirim pesan."""
     with _guild_lock:
         _guild_channels[guild_id] = channels
 
 def get_guild_channels(guild_id: str) -> list:
-    """Ambil daftar channel untuk satu guild."""
     with _guild_lock:
         return _guild_channels.get(guild_id, [])
 
 # ==========================================================
-# Helper — baca config welcome dari Firestore (sync, untuk Flask)
+# Helper — baca config welcome dari Firestore
 # ==========================================================
 def _get_welcome_config(guild_id: str) -> dict:
-    """Baca konfigurasi welcome dari Firestore secara synchronous."""
     if db is None:
         print("[WELCOME-WEB] ⚠️ Firebase tidak tersedia.")
         return {}
@@ -121,45 +116,104 @@ def _get_welcome_config(guild_id: str) -> dict:
     return {}
 
 # ==========================================================
-# Helper — Upload image ke Catbox.moe (PERMANENT, free, no auth)
+# Helper — Auto-compress image kalau terlalu besar
 # ==========================================================
-def _upload_to_catbox(file_data: bytes, filename: str) -> str | None:
+def _compress_image_if_needed(file_data: bytes, max_kb: int = 400) -> bytes:
     """
-    Upload file image ke Catbox.moe (PERMANENT).
-    Returns: URL publik atau None jika gagal.
+    Compress image kalau size melebihi max_kb.
+    Gunakan Pillow untuk resize + compress.
+    Returns: compressed bytes.
     """
+    size_kb = len(file_data) / 1024
+    if size_kb <= max_kb:
+        return file_data  # Tidak perlu compress
+
+    print(f"[COMPRESS] 🗜️ Image {size_kb:.0f}KB > {max_kb}KB, compressing...")
+
     try:
-        # ← FIX: Gunakan endpoint PERMANENT (bukan litterbox temporary)
-        url = "https://catbox.moe/user/api.php"
+        img = Image.open(io.BytesIO(file_data))
 
-        files = {
-            'fileToUpload': (filename, file_data, 'image/png')
-        }
-        data = {
-            'reqtype': 'fileupload'
-            # ← HAPUS: 'time' parameter karena permanent upload tidak butuh expiry
-        }
+        # Convert ke RGB kalau RGBA (JPEG tidak support alpha)
+        if img.mode in ('RGBA', 'P'):
+            img = img.convert('RGB')
 
-        response = requests.post(url, files=files, data=data, timeout=30)
+        # Resize kalau terlalu besar (max 1200px width)
+        max_width = 1200
+        if img.width > max_width:
+            ratio = max_width / img.width
+            new_height = int(img.height * ratio)
+            img = img.resize((max_width, new_height), Image.LANCZOS)
+            print(f"[COMPRESS] 📐 Resized: {img.width}x{img.height}")
 
-        if response.status_code == 200:
-            catbox_url = response.text.strip()
-            if catbox_url.startswith('http'):
-                print(f"[CATBOX] ✅ Upload berhasil: {catbox_url}")
-                return catbox_url
+        # Compress dengan quality berkurang sampai di bawah max_kb
+        quality = 85
+        while quality >= 40:
+            output = io.BytesIO()
+            img.save(output, format='JPEG', quality=quality, optimize=True)
+            compressed = output.getvalue()
+            compressed_kb = len(compressed) / 1024
 
-        print(f"[CATBOX] ❌ Upload gagal: HTTP {response.status_code} — {response.text}")
-        return None
+            if compressed_kb <= max_kb:
+                print(f"[COMPRESS] ✅ Compressed: {size_kb:.0f}KB → {compressed_kb:.0f}KB (quality={quality})")
+                return compressed
+
+            quality -= 10
+            print(f"[COMPRESS] 🔄 Quality {quality+10} too big ({compressed_kb:.0f}KB), trying {quality}...")
+
+        # Kalau masih besar, resize lebih kecil
+        img = img.resize((800, int(img.height * 800 / img.width)), Image.LANCZOS)
+        output = io.BytesIO()
+        img.save(output, format='JPEG', quality=70, optimize=True)
+        compressed = output.getvalue()
+        print(f"[COMPRESS] ✅ Final compress: {size_kb:.0f}KB → {len(compressed)/1024:.0f}KB (800px)")
+        return compressed
 
     except Exception as e:
-        print(f"[CATBOX] ❌ Error upload: {e}")
+        print(f"[COMPRESS] ⚠️ Error compress: {e}, using original")
+        return file_data
+
+
+# ==========================================================
+# Helper — Convert image ke base64 data URL (FREE — Firestore only)
+# ==========================================================
+def _image_to_base64_data_url(file_data: bytes, filename: str) -> str | None:
+    """
+    Convert image bytes ke base64 data URL.
+    Format: data:image/jpeg;base64,xxxxx
+    Simpan langsung di Firestore (100% FREE, tidak perlu Storage/Imgur/Catbox).
+    """
+    try:
+        # Auto-compress kalau terlalu besar
+        compressed_data = _compress_image_if_needed(file_data, max_kb=400)
+
+        # Detect content type
+        ext = filename.lower().split(".")[-1] if "." in filename else "png"
+        mime_types = {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "gif": "image/gif",
+            "webp": "image/webp",
+        }
+        content_type = mime_types.get(ext, "image/jpeg")  # Default JPEG setelah compress
+
+        # Convert ke base64
+        b64_string = base64.b64encode(compressed_data).decode("utf-8")
+        data_url = f"data:{content_type};base64,{b64_string}"
+
+        print(f"[BASE64] ✅ Converted: {len(compressed_data)} bytes → {len(b64_string)} chars base64")
+        return data_url
+
+    except Exception as e:
+        print(f"[BASE64] ❌ Error: {type(e).__name__}: {e}")
+        traceback.print_exc()
         return None
+
 
 # ==========================================================
 # Helper — render template dengan sidebar context
 # ==========================================================
 def _render_page(template_name: str, active_page: str, guild_id: str, **kwargs):
-    """Wrapper render_template yang otomatis inject stats + active_page + guild_id."""
     return render_template(
         template_name,
         s=get_stats_snapshot(),
@@ -185,11 +239,10 @@ def api_stats():
         return jsonify(dict(_bot_stats))
 
 # ==========================================================
-# ROUTES — Dashboard (redirect ke guild pertama)
+# ROUTES — Dashboard
 # ==========================================================
 @app.route("/dashboard")
 def dashboard():
-    """Redirect ke guild pertama kalau ada, otherwise render tanpa guild."""
     s = get_stats_snapshot()
     guilds = s.get("guilds_list", [])
     if guilds:
@@ -200,30 +253,25 @@ def dashboard():
 
 @app.route("/dashboard/<guild_id>/")
 def dashboard_guild(guild_id: str):
-    """Main dashboard untuk guild tertentu."""
     return _render_page("dashboard.html", active_page="main", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/settings")
 def settings_page(guild_id: str):
-    """Placeholder: Settings."""
     return _render_page("settings.html", active_page="settings", guild_id=guild_id)
 
 # ==========================================================
-# ROUTES — Music
+# ROUTES — Music (placeholder)
 # ==========================================================
 @app.route("/dashboard/<guild_id>/music")
 def music_settings(guild_id: str):
-    """Placeholder: Music Player."""
     return _render_page("music_settings.html", active_page="music", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/music/queue")
 def music_queue(guild_id: str):
-    """Placeholder: Queue."""
     return _render_page("music_settings.html", active_page="queue", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/music/playlists")
 def music_playlists(guild_id: str):
-    """Placeholder: Playlists."""
     return _render_page("music_settings.html", active_page="playlists", guild_id=guild_id)
 
 # ==========================================================
@@ -231,7 +279,6 @@ def music_playlists(guild_id: str):
 # ==========================================================
 @app.route("/dashboard/<guild_id>/welcome")
 def welcome_settings(guild_id: str):
-    """GET — Render halaman form konfigurasi Welcome."""
     channels = get_guild_channels(guild_id)
     current_config = _get_welcome_config(guild_id)
 
@@ -263,17 +310,14 @@ def welcome_settings(guild_id: str):
 
 @app.route("/dashboard/<guild_id>/welcome/leave")
 def welcome_leave(guild_id: str):
-    """Placeholder: Leave announcement."""
     return _render_page("welcome_settings.html", active_page="leave", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/welcome/ban")
 def welcome_ban(guild_id: str):
-    """Placeholder: Ban announcement."""
     return _render_page("welcome_settings.html", active_page="ban", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/welcome/boost")
 def welcome_boost(guild_id: str):
-    """Placeholder: Boost welcome announcement."""
     return _render_page("welcome_settings.html", active_page="boost_welcome", guild_id=guild_id)
 
 # ==========================================================
@@ -281,12 +325,10 @@ def welcome_boost(guild_id: str):
 # ==========================================================
 @app.route("/dashboard/<guild_id>/boost")
 def boost_tracker(guild_id: str):
-    """Placeholder: Boost riwayat."""
     return _render_page("boost_settings.html", active_page="boost_tracker", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/boost/stats")
 def boost_stats(guild_id: str):
-    """Placeholder: Boost statistik."""
     return _render_page("boost_settings.html", active_page="boost_stats", guild_id=guild_id)
 
 # ==========================================================
@@ -294,12 +336,10 @@ def boost_stats(guild_id: str):
 # ==========================================================
 @app.route("/dashboard/<guild_id>/donation")
 def donation_tracker(guild_id: str):
-    """Placeholder: Donation riwayat."""
     return _render_page("donation_settings.html", active_page="donation", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/donation/stats")
 def donation_stats(guild_id: str):
-    """Placeholder: Donation statistik."""
     return _render_page("donation_settings.html", active_page="donation_stats", guild_id=guild_id)
 
 # ==========================================================
@@ -307,35 +347,29 @@ def donation_stats(guild_id: str):
 # ==========================================================
 @app.route("/dashboard/<guild_id>/message-builder")
 def message_builder(guild_id: str):
-    """Placeholder: Message Builder."""
     return _render_page("message_builder.html", active_page="message_builder", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/templates")
 def templates_page(guild_id: str):
-    """Placeholder: Templates."""
     return _render_page("templates.html", active_page="templates", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/actions")
 def actions_page(guild_id: str):
-    """Placeholder: Actions."""
     return _render_page("actions.html", active_page="actions", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/auto-responders")
 def auto_responders(guild_id: str):
-    """Placeholder: Auto Responders."""
     return _render_page("auto_responders.html", active_page="auto_responders", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/ai-chat")
 def ai_chat_page(guild_id: str):
-    """Placeholder: AI Chat."""
     return _render_page("ai_chat.html", active_page="ai_chat", guild_id=guild_id)
 
 # ==========================================================
-# ROUTES — Welcome Save (POST, JSON response)
+# ROUTES — Welcome Save (POST) — BASE64 FIRESTORE (FREE + AUTO-COMPRESS)
 # ==========================================================
 @app.route("/dashboard/<guild_id>/welcome/save", methods=["POST"])
 def save_welcome(guild_id: str):
-    """POST — Simpan config welcome ke Firestore dengan merge=True."""
     if db is None:
         return jsonify({
             "success": False,
@@ -345,8 +379,6 @@ def save_welcome(guild_id: str):
     try:
         enabled = "enabled" in request.form
         is_embed = "is_embed" in request.form
-
-        # v3.7: Banner style fields
         style = request.form.get("style", "embed").strip()
         banner_avatar_ring = "banner_avatar_ring" in request.form
 
@@ -356,7 +388,6 @@ def save_welcome(guild_id: str):
         embed_title = request.form.get("embed_title", "").strip()
         bg_image_url = request.form.get("bg_image_url", "").strip()
 
-        # Banner fields
         banner_bg_url = request.form.get("banner_bg_url", "").strip()
         banner_text = request.form.get("banner_text", "WELCOME").strip()
         banner_subtext = request.form.get("banner_subtext", "Member ke-{count} • {server}").strip()
@@ -377,24 +408,25 @@ def save_welcome(guild_id: str):
                 header, base64_data = uploaded_file_data.split(",", 1)
                 file_bytes = base64.b64decode(base64_data)
 
-                print(f"[WELCOME-WEB] 📤 Uploading {len(file_bytes)} bytes to Catbox...")
+                print(f"[WELCOME-WEB] 📤 Processing {len(file_bytes)} bytes...")
 
-                # ← FIX: Gunakan filename yang lebih deskriptif
                 safe_filename = uploaded_file_name or "welcome_upload.png"
-                catbox_url = _upload_to_catbox(file_bytes, safe_filename)
 
-                if catbox_url:
+                # ← FIX v3.7.3: Convert ke base64 data URL dengan auto-compress
+                # FREE — tidak perlu Storage/Imgur/Catbox!
+                data_url = _image_to_base64_data_url(file_bytes, safe_filename)
+
+                if data_url:
                     if upload_target == "banner_bg":
-                        banner_bg_url = catbox_url
-                        print(f"[WELCOME-WEB] ✅ Banner BG uploaded: {catbox_url}")
+                        banner_bg_url = data_url
+                        print(f"[WELCOME-WEB] ✅ Banner BG saved to Firestore (base64, {len(data_url)} chars)")
                     else:
-                        bg_image_url = catbox_url
-                        print(f"[WELCOME-WEB] ✅ Embed BG uploaded: {catbox_url}")
+                        bg_image_url = data_url
+                        print(f"[WELCOME-WEB] ✅ Embed BG saved to Firestore (base64, {len(data_url)} chars)")
                 else:
-                    print("[WELCOME-WEB] ⚠️ Catbox upload failed, keeping existing URL")
+                    print("[WELCOME-WEB] ⚠️ Base64 conversion failed")
 
             except Exception as e:
-                # ← FIX: Log full traceback untuk debugging
                 print(f"[WELCOME-WEB] ❌ Error processing upload: {e}")
                 traceback.print_exc()
 
@@ -428,9 +460,7 @@ def save_welcome(guild_id: str):
             }
         }
 
-        db.collection("guild_settings").document(guild_id).set(
-            payload, merge=True
-        )
+        db.collection("guild_settings").document(guild_id).set(payload, merge=True)
 
         print(f"[WELCOME-WEB] ✅ Config tersimpan untuk guild {guild_id} (style={style})")
         return jsonify({
@@ -439,7 +469,6 @@ def save_welcome(guild_id: str):
         }), 200
 
     except Exception as e:
-        # ← FIX: Log full traceback untuk debugging
         print(f"[WELCOME-WEB] ❌ Error saat menyimpan: {e}")
         traceback.print_exc()
         return jsonify({
