@@ -1,9 +1,14 @@
 # =============================================================================
-# cogs/welcome.py — Hidden Hamlet Discord Bot v3.7
+# cogs/welcome.py — Hidden Hamlet Discord Bot v3.7.3
 # Modul  : Welcome Announcement (Join Message) — Dual Style: Embed + Banner
 # Author : zeeinz-ux
 # Features: Embed style + Banner style (Pillow image generation), 
 #           Join + Rejoin support, Anti-spam cooldown, Default background image
+# FIX v3.7.3:
+#   - Remove redundant on_guild_member_add listener
+#   - Add asyncio.Lock per member to prevent race-condition double welcome
+#   - Fix on_member_update: skip first-join (only handle screening & true rejoin)
+#   - _download_image: add User-Agent header + longer timeout
 # =============================================================================
 
 import discord
@@ -41,7 +46,21 @@ class WelcomeCog(commands.Cog, name="Welcome"):
         # Anti-spam: track last welcome per member per guild (cooldown 5 menit)
         self._last_welcome = {}  # key: "guild_id:user_id" → timestamp
         self._cooldown_seconds = 300  # 5 menit
-        print("[WELCOME] ✅ WelcomeCog berhasil dimuat (v3.7 — Dual Style).")
+
+        # ← FIX v3.7.3: Lock per member untuk mencegah race condition double welcome
+        self._welcome_locks = {}  # key: "guild_id:user_id" → asyncio.Lock()
+
+        print("[WELCOME] ✅ WelcomeCog berhasil dimuat (v3.7.3 — Anti-double + Fix download).")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # LOCK HELPER (NEW v3.7.3)
+    # ─────────────────────────────────────────────────────────────────────────
+    def _get_lock(self, guild_id: str, user_id: str) -> asyncio.Lock:
+        """Ambil atau buat asyncio.Lock untuk member tertentu."""
+        key = f"{guild_id}:{user_id}"
+        if key not in self._welcome_locks:
+            self._welcome_locks[key] = asyncio.Lock()
+        return self._welcome_locks[key]
 
     # ─────────────────────────────────────────────────────────────────────────
     # ANTI-SPAM HELPER
@@ -127,70 +146,73 @@ class WelcomeCog(commands.Cog, name="Welcome"):
         guild_id = str(member.guild.id)
         user_id = str(member.id)
 
-        # Anti-spam check
-        if not self._can_send_welcome(guild_id, user_id):
-            return
+        # ← FIX v3.7.3: Gunakan lock per member untuk mencegah race condition
+        lock = self._get_lock(guild_id, user_id)
+        async with lock:
+            # Anti-spam check (di dalam lock agar tidak ada race)
+            if not self._can_send_welcome(guild_id, user_id):
+                return
 
-        print(f"[WELCOME] 🔥 Welcome triggered! Member: {member.name} (ID: {user_id}) di Guild: {member.guild.name} (ID: {guild_id})")
+            print(f"[WELCOME] 🔥 Welcome triggered! Member: {member.name} (ID: {user_id}) di Guild: {member.guild.name} (ID: {guild_id})")
 
-        # 1. Ambil konfigurasi dari Firestore
-        cfg = await self.get_welcome_config(guild_id)
-        if cfg is None:
-            print(f"[WELCOME] ⚠️ Config None untuk guild {guild_id}, skip welcome.")
-            return
+            # 1. Ambil konfigurasi dari Firestore
+            cfg = await self.get_welcome_config(guild_id)
+            if cfg is None:
+                print(f"[WELCOME] ⚠️ Config None untuk guild {guild_id}, skip welcome.")
+                return
 
-        # 2. Validasi channel tujuan
-        channel_id_str = cfg.get("channel_id", "")
-        if not channel_id_str:
-            print(f"[WELCOME] ⚠️ Guild {guild_id}: channel_id belum diset.")
-            return
+            # 2. Validasi channel tujuan
+            channel_id_str = cfg.get("channel_id", "")
+            if not channel_id_str:
+                print(f"[WELCOME] ⚠️ Guild {guild_id}: channel_id belum diset.")
+                return
 
-        print(f"[WELCOME] 📍 Channel target: {channel_id_str}")
+            print(f"[WELCOME] 📍 Channel target: {channel_id_str}")
 
-        try:
-            channel = member.guild.get_channel(int(channel_id_str))
-        except (ValueError, TypeError) as e:
-            print(f"[WELCOME] ❌ channel_id tidak valid: '{channel_id_str}' — Error: {e}")
-            return
+            try:
+                channel = member.guild.get_channel(int(channel_id_str))
+            except (ValueError, TypeError) as e:
+                print(f"[WELCOME] ❌ channel_id tidak valid: '{channel_id_str}' — Error: {e}")
+                return
 
-        if channel is None:
-            print(f"[WELCOME] ❌ Channel {channel_id_str} tidak ditemukan di guild {guild_id}.")
-            return
+            if channel is None:
+                print(f"[WELCOME] ❌ Channel {channel_id_str} tidak ditemukan di guild {guild_id}.")
+                return
 
-        print(f"[WELCOME] ✅ Channel ditemukan: #{channel.name} (ID: {channel.id})")
+            print(f"[WELCOME] ✅ Channel ditemukan: #{channel.name} (ID: {channel.id})")
 
-        # 3. Parse placeholder dalam teks pesan
-        raw_text = cfg.get("message_text", "Selamat datang {user} di {server}! 🎉")
-        parsed_text = self.parse_placeholders(raw_text, member)
+            # 3. Parse placeholder dalam teks pesan
+            raw_text = cfg.get("message_text", "Selamat datang {user} di {server}! 🎉")
+            parsed_text = self.parse_placeholders(raw_text, member)
 
-        # 4. Tentukan style (embed atau banner)
-        style = cfg.get("style", "embed")
-        is_embed = cfg.get("is_embed", False)
+            # 4. Tentukan style (embed atau banner)
+            style = cfg.get("style", "embed")
+            is_embed = cfg.get("is_embed", False)
 
-        print(f"[WELCOME] 📝 Message text (raw): {raw_text}")
-        print(f"[WELCOME] 📝 Message text (parsed): {parsed_text}")
-        print(f"[WELCOME] 🎨 Style: {style}, is_embed: {is_embed}")
+            print(f"[WELCOME] 📝 Message text (raw): {raw_text}")
+            print(f"[WELCOME] 📝 Message text (parsed): {parsed_text}")
+            print(f"[WELCOME] 🎨 Style: {style}, is_embed: {is_embed}")
 
-        # 5. Kirim pesan sesuai style
-        try:
-            if style == "banner":
-                print(f"[WELCOME] 📤 Mengirim BANNER ke #{channel.name}...")
-                await self._send_banner(channel, member, cfg, parsed_text)
-            elif is_embed:
-                print(f"[WELCOME] 📤 Mengirim EMBED ke #{channel.name}...")
-                await self._send_embed(channel, member, cfg, parsed_text)
-            else:
-                print(f"[WELCOME] 📤 Mengirim PLAIN TEXT ke #{channel.name}...")
-                await self._send_plain(channel, parsed_text)
+            # 5. Kirim pesan sesuai style
+            try:
+                if style == "banner":
+                    print(f"[WELCOME] 📤 Mengirim BANNER ke #{channel.name}...")
+                    await self._send_banner(channel, member, cfg, parsed_text)
+                elif is_embed:
+                    print(f"[WELCOME] 📤 Mengirim EMBED ke #{channel.name}...")
+                    await self._send_embed(channel, member, cfg, parsed_text)
+                else:
+                    print(f"[WELCOME] 📤 Mengirim PLAIN TEXT ke #{channel.name}...")
+                    await self._send_plain(channel, parsed_text)
 
-            print(f"[WELCOME] 🎉 Sambutan BERHASIL terkirim → {member} di '{member.guild.name}'")
+                print(f"[WELCOME] 🎉 Sambutan BERHASIL terkirim → {member} di '{member.guild.name}'")
 
-        except discord.Forbidden as e:
-            print(f"[WELCOME] ❌ FORBIDDEN: Tidak ada izin kirim pesan di #{channel.name}. Error: {e}")
-        except discord.HTTPException as e:
-            print(f"[WELCOME] ❌ HTTPException saat kirim pesan: {e}")
-        except Exception as e:
-            print(f"[WELCOME] ❌ UNEXPECTED ERROR: {type(e).__name__}: {e}")
+            except discord.Forbidden as e:
+                print(f"[WELCOME] ❌ FORBIDDEN: Tidak ada izin kirim pesan di #{channel.name}. Error: {e}")
+            except discord.HTTPException as e:
+                print(f"[WELCOME] ❌ HTTPException saat kirim pesan: {e}")
+            except Exception as e:
+                print(f"[WELCOME] ❌ UNEXPECTED ERROR: {type(e).__name__}: {e}")
 
     # ─────────────────────────────────────────────────────────────────────────
     # EVENT LISTENER: on_member_join (join pertama kali)
@@ -211,8 +233,8 @@ class WelcomeCog(commands.Cog, name="Welcome"):
 
         Logic:
         - Kalau before.pending=True → after.pending=False: member selesai screening
-        - Kalau before.roles kosong → after.roles ada: member baru diberi role (rejoin)
-        - Kalau before.joined_at is None → after.joined_at ada: member baru join
+        - Kalau before.joined_at is None → after.joined_at ada: member baru join (TAPI
+          skip ini karena sudah ditangani on_member_join untuk menghindari double)
         """
         # Skip kalau bukan guild yang sama (shouldn't happen tapi safety)
         if before.guild.id != after.guild.id:
@@ -227,39 +249,49 @@ class WelcomeCog(commands.Cog, name="Welcome"):
             await self._send_welcome(after)
             return
 
-        # Case 2: Rejoin detection (joined_at berubah = baru join/rejoin)
-        # Note: joined_at berubah saat member join, meskipun pernah join sebelumnya
-        if before.joined_at != after.joined_at and after.joined_at is not None:
-            print(f"[WELCOME] 🔄 on_member_update (rejoin): {after.name} joined_at updated di {after.guild.name}")
-            await self._send_welcome(after)
-            return
+        # ← FIX v3.7.3: HAPUS rejoin detection via joined_at
+        #    Karena on_member_join sudah handle join pertama, dan joined_at berubah
+        #    saat join pertama juga → menyebabkan double welcome!
+        #    Jika ingin support rejoin, gunakan database tracking, bukan joined_at.
 
     # ─────────────────────────────────────────────────────────────────────────
-    # FALLBACK: on_guild_member_add (alternative event)
+    # REMOVED: on_guild_member_add (redundant dengan on_member_join)
     # ─────────────────────────────────────────────────────────────────────────
-    @commands.Cog.listener()
-    async def on_guild_member_add(self, member: discord.Member):
-        """Alternative event listener (backup untuk on_member_join)."""
-        print(f"[WELCOME] 📥 on_guild_member_add event: {member.name} added to {member.guild.name}")
-        await self._send_welcome(member)
+    # @commands.Cog.listener()
+    # async def on_guild_member_add(self, member: discord.Member):
+    #     """Alternative event listener (backup untuk on_member_join)."""
+    #     print(f"[WELCOME] 📥 on_guild_member_add event: {member.name} added to {member.guild.name}")
+    #     await self._send_welcome(member)
 
     # ─────────────────────────────────────────────────────────────────────────
     # HELPER: Download image dari URL ke bytes (async)
+    # ← FIX v3.7.3: Add User-Agent header + longer timeout + better error handling
     # ─────────────────────────────────────────────────────────────────────────
     async def _download_image(self, url: str) -> bytes | None:
         """Download image dari URL, return bytes atau None jika gagal."""
         if not url:
             return None
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            }
+            timeout = aiohttp.ClientTimeout(total=30, connect=10)
+
+            async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+                async with session.get(url, allow_redirects=True) as resp:
                     if resp.status == 200:
-                        return await resp.read()
+                        data = await resp.read()
+                        print(f"[WELCOME] ✅ Downloaded image: {len(data)} bytes from {url}")
+                        return data
                     else:
                         print(f"[WELCOME] ⚠️ Download image failed: HTTP {resp.status} for {url}")
                         return None
+        except asyncio.TimeoutError:
+            print(f"[WELCOME] ⚠️ Download image timeout: {url}")
+            return None
         except Exception as e:
-            print(f"[WELCOME] ⚠️ Download image error: {e}")
+            print(f"[WELCOME] ⚠️ Download image error: {type(e).__name__}: {e}")
             return None
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -288,11 +320,15 @@ class WelcomeCog(commands.Cog, name="Welcome"):
             if not bg_url:
                 bg_url = self.DEFAULT_BANNER_BG
 
+            print(f"[WELCOME] 🖼️ Banner background URL: {bg_url}")
+
             bg_bytes = await self._download_image(bg_url)
             if bg_bytes:
                 bg_img = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
+                print(f"[WELCOME] ✅ Background loaded: {bg_img.size}")
             else:
                 # Fallback: buat gradient background
+                print(f"[WELCOME] ⚠️ Using fallback gradient background")
                 bg_img = Image.new("RGBA", (1200, 500), (15, 15, 35, 255))
                 draw = ImageDraw.Draw(bg_img)
                 for y in range(500):
