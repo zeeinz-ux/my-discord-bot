@@ -1,9 +1,9 @@
 """
 ================================================================================
-COG: AI Chat Module v4.1 — Hidden Hamlet Discord Bot
+COG: AI Chat Module v4.2 — Hidden Hamlet Discord Bot
 ================================================================================
 File        : backend/cogs/ai_chat.py
-Deskripsi   : Integrasi Google Gemini AI dengan discord.py v2.x syntax.
+Deskripsi   : Integrasi Google Gemini AI dengan discord.py v2.x.
               • Slash command pakai @app_commands.command()
               • Mention handler (@bot)
               • Channel restriction (bisa pilih channel via dashboard)
@@ -11,6 +11,7 @@ Deskripsi   : Integrasi Google Gemini AI dengan discord.py v2.x syntax.
               • Rate limit handling (429/ResourceExhausted)
               • Chat history Firestore (max 5 pasang, slice otomatis)
               • Smart server info (hanya channel PUBLIK)
+              • FIX v4.2: Async Firestore, no silent return, error handling
 Model       : gemini-2.0-flash (FREE tier)
 ================================================================================
 """
@@ -38,8 +39,7 @@ COOLDOWN_SECONDS = 5           # Anti-spam per user
 DEFAULT_PERSONALITY = "friendly"
 
 # ── System Prompt Template ──
-SYSTEM_PROMPT_TEMPLATE = """\
-Kamu adalah AI Resmi dari bot Discord "Hidden Hamlet". 
+SYSTEM_PROMPT_TEMPLATE = """Kamu adalah AI Resmi dari bot Discord "Hidden Hamlet". 
 Personality saat ini: {personality}
 
 Gaya bahasa:
@@ -83,16 +83,16 @@ class AIChat(commands.Cog):
         print(f"[AI CHAT] ✅ Cog loaded. Model: {self.model_name}")
 
     # ═══════════════════════════════════════════════════════════════════════
-    # HELPER: Ambil AI Chat settings dari Firestore
+    # HELPER: Ambil AI Chat settings dari Firestore (ASYNC — non-blocking)
     # ═══════════════════════════════════════════════════════════════════════
-    def _get_guild_ai_settings(self, guild_id: str) -> dict:
+    async def _get_guild_ai_settings(self, guild_id: str) -> dict:
         """
         Ambil seluruh AI Chat settings untuk guild.
         Return: {enabled, channel_id, personality, temperature}
         """
         try:
             doc_ref = db.collection("guild_settings").document(str(guild_id))
-            doc = doc_ref.get()
+            doc = await asyncio.to_thread(doc_ref.get)
             if not doc.exists:
                 return {"enabled": False, "channel_id": ""}
             data = doc.to_dict()
@@ -105,26 +105,26 @@ class AIChat(commands.Cog):
             }
         except Exception as e:
             print(f"[AI CHAT] ⚠️ Error ambil settings: {e}")
+            traceback.print_exc()
             return {"enabled": False, "channel_id": ""}
 
     # ═══════════════════════════════════════════════════════════════════════
     # HELPER: Cek channel restriction
     # ═══════════════════════════════════════════════════════════════════════
-    def _is_channel_allowed(self, guild_id: str, channel_id: str) -> bool:
+    def _is_channel_allowed(self, settings: dict, channel_id: str) -> bool:
         """
         Jika channel_id di settings kosong → izinkan SEMUA channel.
         Jika terisi → hanya izinkan di channel tersebut.
         """
-        settings = self._get_guild_ai_settings(guild_id)
         allowed_channel = settings.get("channel_id", "")
         if not allowed_channel:
             return True
         return str(channel_id) == str(allowed_channel)
 
     # ═══════════════════════════════════════════════════════════════════════
-    # HELPER: Ambil chat history user dari Firestore
+    # HELPER: Ambil chat history user dari Firestore (ASYNC)
     # ═══════════════════════════════════════════════════════════════════════
-    def _get_chat_history(self, guild_id: str, user_id: str) -> List[Dict[str, Any]]:
+    async def _get_chat_history(self, guild_id: str, user_id: str) -> List[Dict[str, Any]]:
         try:
             doc_ref = (
                 db.collection("guild_settings")
@@ -132,7 +132,7 @@ class AIChat(commands.Cog):
                 .collection("ai_chat")
                 .document(str(user_id))
             )
-            doc = doc_ref.get()
+            doc = await asyncio.to_thread(doc_ref.get)
             if not doc.exists:
                 return []
             data = doc.to_dict()
@@ -147,9 +147,9 @@ class AIChat(commands.Cog):
             return []
 
     # ═══════════════════════════════════════════════════════════════════════
-    # HELPER: Simpan chat history (slice jika >10, pakai merge=True)
+    # HELPER: Simpan chat history (ASYNC — non-blocking)
     # ═══════════════════════════════════════════════════════════════════════
-    def _save_chat_history(
+    async def _save_chat_history(
         self,
         guild_id: str,
         user_id: str,
@@ -158,7 +158,7 @@ class AIChat(commands.Cog):
         personality: str = DEFAULT_PERSONALITY,
     ) -> None:
         try:
-            old_history = self._get_chat_history(guild_id, user_id)
+            old_history = await self._get_chat_history(guild_id, user_id)
             now = datetime.now(timezone.utc).isoformat()
             new_history = old_history + [
                 {"role": "user", "content": user_msg, "timestamp": now},
@@ -174,7 +174,8 @@ class AIChat(commands.Cog):
                 .collection("ai_chat")
                 .document(str(user_id))
             )
-            doc_ref.set(
+            await asyncio.to_thread(
+                doc_ref.set,
                 {
                     "history": new_history,
                     "personality": personality,
@@ -187,37 +188,22 @@ class AIChat(commands.Cog):
             traceback.print_exc()
 
     # ═══════════════════════════════════════════════════════════════════════
-    # HELPER: Bangun konteks server (hanya channel PUBLIK)
+    # HELPER: Bangun konteks server (lightweight)
     # ═══════════════════════════════════════════════════════════════════════
     def _build_server_context(self, guild: discord.Guild) -> str:
         if not guild:
             return ""
-
-        member_count = guild.member_count or len(guild.members)
-        bot_count = sum(1 for m in guild.members if m.bot)
-
-        public_text = [
-            c for c in guild.text_channels
-            if c.permissions_for(guild.default_role).view_channel
-        ]
-        public_voice = [
-            c for c in guild.voice_channels
-            if c.permissions_for(guild.default_role).view_channel
-        ]
-
-        owner = guild.owner.mention if guild.owner else "Unknown"
-
-        return f"""\
-[CONTEXT SERVER]
+        try:
+            member_count = guild.member_count or 0
+            return f"""[CONTEXT SERVER]
 • Nama Server : {guild.name}
 • ID Server   : {guild.id}
-• Owner       : {owner}
-• Total Member: {member_count} ({member_count - bot_count} manusia, {bot_count} bot)
-• Text Channel Publik : {len(public_text)}
-• Voice Channel Publik: {len(public_voice)}
-• Boost Level         : {guild.premium_tier}
-• Dibuat Pada         : {guild.created_at.strftime('%Y-%m-%d')}
+• Total Member: {member_count}
+• Boost Level : {guild.premium_tier}
+• Dibuat Pada : {guild.created_at.strftime('%Y-%m-%d')}
 """
+        except Exception:
+            return ""
 
     # ═══════════════════════════════════════════════════════════════════════
     # HELPER: Call Gemini API (async wrapper via to_thread)
@@ -294,8 +280,9 @@ class AIChat(commands.Cog):
         user_id = str(user.id)
 
         # ── 1. Cek apakah fitur aktif ──
-        settings = self._get_guild_ai_settings(guild_id)
+        settings = await self._get_guild_ai_settings(guild_id)
         if not settings.get("enabled", False):
+            await self._send_response(ctx, "⚠️ AI Chat sedang dimatikan oleh admin server. Hubungi admin untuk mengaktifkannya.")
             return
 
         # ── 2. Cek channel restriction ──
@@ -308,12 +295,13 @@ class AIChat(commands.Cog):
             channel_id = str(ctx.channel.id)
             typing_ctx = ctx.channel
 
-        if not self._is_channel_allowed(guild_id, channel_id):
-            return  # Silent ignore
+        if not self._is_channel_allowed(settings, channel_id):
+            await self._send_response(ctx, "⚠️ AI Chat hanya bisa digunakan di channel yang sudah diatur oleh admin.")
+            return
 
         # ── 3. Ambil personality & history ──
         personality = settings.get("personality", DEFAULT_PERSONALITY)
-        history = self._get_chat_history(guild_id, user_id)
+        history = await self._get_chat_history(guild_id, user_id)
 
         # ── 4. Bangun system prompt ──
         server_ctx = self._build_server_context(guild)
@@ -323,7 +311,15 @@ class AIChat(commands.Cog):
         )
 
         # ── 5. Panggil Gemini dengan typing indicator ──
-        async with typing_ctx.typing():
+        try:
+            async with typing_ctx.typing():
+                response_text = await self._call_gemini(
+                    user_message=user_message,
+                    history=history,
+                    system_prompt=system_prompt,
+                )
+        except Exception as e:
+            print(f"[AI CHAT] ⚠️ Typing indicator error: {e}")
             response_text = await self._call_gemini(
                 user_message=user_message,
                 history=history,
@@ -331,7 +327,7 @@ class AIChat(commands.Cog):
             )
 
         # ── 6. Simpan ke Firestore ──
-        self._save_chat_history(
+        await self._save_chat_history(
             guild_id=guild_id,
             user_id=user_id,
             user_msg=user_message,
@@ -372,12 +368,20 @@ class AIChat(commands.Cog):
 
         # ── Defer & Process ──
         await interaction.response.defer(thinking=False)
-        await self._process_ai_chat(
-            ctx=interaction,
-            user_message=pertanyaan,
-            guild=interaction.guild,
-            user=interaction.user,
-        )
+        try:
+            await self._process_ai_chat(
+                ctx=interaction,
+                user_message=pertanyaan,
+                guild=interaction.guild,
+                user=interaction.user,
+            )
+        except Exception as e:
+            print(f"[AI CHAT] ❌ Fatal error di /ask: {e}")
+            traceback.print_exc()
+            try:
+                await interaction.followup.send("❌ Terjadi error internal. Coba lagi nanti ya!")
+            except Exception:
+                pass  # Interaction token sudah expired
 
     # ═══════════════════════════════════════════════════════════════════════
     # EVENT LISTENER: Mention @HiddenHamlet di text channel
@@ -389,7 +393,12 @@ class AIChat(commands.Cog):
         if not message.guild:
             return
 
-        # Cek mention
+        # ── Cek apakah AI Chat aktif untuk guild ini ──
+        settings = await self._get_guild_ai_settings(str(message.guild.id))
+        if not settings.get("enabled", False):
+            return  # Silent ignore kalau fitur mati (mention tidak perlu respon)
+
+        # ── Cek mention ──
         bot_mentioned = (
             self.bot.user in message.mentions
             or self.bot.user.id in [m.id for m in message.mentions]
@@ -398,8 +407,8 @@ class AIChat(commands.Cog):
             return
 
         # ── Cek channel restriction ──
-        if not self._is_channel_allowed(str(message.guild.id), str(message.channel.id)):
-            return  # Silent ignore
+        if not self._is_channel_allowed(settings, str(message.channel.id)):
+            return  # Silent ignore kalau channel salah
 
         # ── Extract text setelah mention ──
         content = message.content.replace(f"<@{self.bot.user.id}>", "").replace(
@@ -425,12 +434,20 @@ class AIChat(commands.Cog):
         self._cooldowns[key] = now
 
         # ── Process ──
-        await self._process_ai_chat(
-            ctx=message,
-            user_message=content,
-            guild=message.guild,
-            user=message.author,
-        )
+        try:
+            await self._process_ai_chat(
+                ctx=message,
+                user_message=content,
+                guild=message.guild,
+                user=message.author,
+            )
+        except Exception as e:
+            print(f"[AI CHAT] ❌ Fatal error di on_message: {e}")
+            traceback.print_exc()
+            try:
+                await message.reply("❌ Terjadi error internal. Coba lagi nanti ya!", mention_author=False)
+            except Exception:
+                pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════
