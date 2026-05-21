@@ -212,11 +212,10 @@ class AIChat(commands.Cog):
                 data = await resp.json()
 
                 if status == 429:
-                    error_msg = data.get("error", {}).get("message", "")
-                    print(f"[AI CHAT] ⛔ Google Rate Limit: {error_msg[:200]}")
-                    if "limit: 0" in error_msg or "Resource has been exhausted" in error_msg:
-                        return "QUOTA_ZERO", False
-                    return "", False
+                    error_msg = data.get("error", {}).get("message", "Rate limit or quota exhausted.")
+                    print(f"[AI CHAT] ⛔ Google Rate Limit (429): {error_msg[:200]}")
+                    # Anggap semua error 429 sebagai sinyal kuota/limit habis untuk fallback.
+                    return "QUOTA_ZERO", False
 
                 if status == 400:
                     err_detail = data.get("error", data)
