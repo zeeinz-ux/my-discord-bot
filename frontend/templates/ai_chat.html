@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}AI Chat — Hidden Hamlet{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ai_chat.css') }}" />
+{% endblock %}
 {% block content %}
 <div class="page-wrap">
   <nav class="breadcrumb">
@@ -144,9 +147,7 @@
     </div>
   </div>
 </div>
-
+{% endblock %}
+{% block extra_js %}
 <script src="{{ url_for('static', filename='js/ai_chat.js') }}"></script>
-<script>
-  window.CURRENT_GUILD_ID = "{{ guild_id }}";
-</script>
 {% endblock %}
