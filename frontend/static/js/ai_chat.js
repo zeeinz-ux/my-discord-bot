@@ -1,6 +1,6 @@
 /* ================================================================================
-   JS: AI Chat Settings v4.2 — Hidden Hamlet Dashboard
-   FIX: Safety check for undefined GUILD_ID, better error handling
+   JS: AI Chat Settings v4.5 — Hidden Hamlet Dashboard
+   FIX: Spinner robustness (style.display instead of classList), model sync v4.5
    ================================================================================ */
 
 (function () {
@@ -60,8 +60,21 @@
     apiStatus: document.getElementById("apiStatusBadge"),
   };
 
+  // ── Robust show/hide helpers ──
+  function show(el) {
+    if (!el) return;
+    el.style.display = "";
+    el.classList.remove("hidden");
+  }
+
+  function hide(el) {
+    if (!el) return;
+    el.style.display = "none";
+    el.classList.add("hidden");
+  }
+
   async function init() {
-    console.log("[AI Chat] ✅ Initializing with guild_id:", GUILD_ID);
+    console.log("[AI Chat] ✅ Initializing v4.5 with guild_id:", GUILD_ID);
     await loadSettings();
     setupEventListeners();
     await loadHistory();
@@ -84,11 +97,11 @@
       els.toggle.checked = data.ai_chat_enabled || false;
 
       const cfg = data.ai_chat || {};
-      if (cfg.personality) els.personality.value = cfg.personality;
-      if (cfg.channel_id) els.channel.value = cfg.channel_id;
-      if (cfg.temperature !== undefined && cfg.temperature !== null) {
+      if (cfg.personality && els.personality) els.personality.value = cfg.personality;
+      if (cfg.channel_id && els.channel) els.channel.value = cfg.channel_id;
+      if (cfg.temperature !== undefined && cfg.temperature !== null && els.temperature) {
         els.temperature.value = cfg.temperature;
-        els.tempValue.textContent = cfg.temperature;
+        if (els.tempValue) els.tempValue.textContent = cfg.temperature;
       }
 
       updateToggleVisuals();
@@ -100,12 +113,14 @@
   }
 
   function setupEventListeners() {
-    els.toggle.addEventListener("change", handleToggle);
-    els.temperature.addEventListener("input", (e) => {
-      els.tempValue.textContent = e.target.value;
-    });
-    els.saveBtn.addEventListener("click", handleSaveSettings);
-    els.refreshHistory.addEventListener("click", loadHistory);
+    if (els.toggle) els.toggle.addEventListener("change", handleToggle);
+    if (els.temperature) {
+      els.temperature.addEventListener("input", (e) => {
+        if (els.tempValue) els.tempValue.textContent = e.target.value;
+      });
+    }
+    if (els.saveBtn) els.saveBtn.addEventListener("click", handleSaveSettings);
+    if (els.refreshHistory) els.refreshHistory.addEventListener("click", loadHistory);
   }
 
   async function handleToggle() {
@@ -146,7 +161,9 @@
   }
 
   function updateToggleVisuals() {
+    if (!els.toggle) return;
     const card = els.toggle.closest(".card");
+    if (!card) return;
     if (els.toggle.checked) {
       card.style.borderColor = "var(--accent-primary)";
       card.style.background =
@@ -159,15 +176,17 @@
 
   async function handleSaveSettings() {
     const payload = {
-      personality: els.personality.value,
-      channel_id: els.channel.value,
-      temperature: parseFloat(els.temperature.value),
-      model: "gemini-2.0-flash",
+      personality: els.personality ? els.personality.value : "friendly",
+      channel_id: els.channel ? els.channel.value : "",
+      temperature: els.temperature ? parseFloat(els.temperature.value) : 0.75,
+      model: "gemini-2.5-flash", // v4.5: sync dengan backend
     };
 
-    const originalText = els.saveBtn.innerHTML;
-    els.saveBtn.innerHTML = `<span class="btn-icon">⏳</span> Menyimpan...`;
-    els.saveBtn.disabled = true;
+    const originalText = els.saveBtn ? els.saveBtn.innerHTML : "Simpan";
+    if (els.saveBtn) {
+      els.saveBtn.innerHTML = `<span class="btn-icon">⏳</span> Menyimpan...`;
+      els.saveBtn.disabled = true;
+    }
 
     try {
       const res = await fetch(SAVE_URL, {
@@ -192,15 +211,24 @@
       console.error("[AI Chat] Save error:", err);
       showToast("❌", "Koneksi error. Coba lagi.", "error");
     } finally {
-      els.saveBtn.innerHTML = originalText;
-      els.saveBtn.disabled = false;
+      if (els.saveBtn) {
+        els.saveBtn.innerHTML = originalText;
+        els.saveBtn.disabled = false;
+      }
     }
   }
 
   async function loadHistory() {
-    els.historyLoading.classList.remove("hidden");
-    els.historyEmpty.classList.add("hidden");
-    els.historyList.innerHTML = "";
+    // ROBUST: pakai style.display + classList
+    if (els.historyLoading) {
+      show(els.historyLoading);
+    }
+    if (els.historyEmpty) {
+      hide(els.historyEmpty);
+    }
+    if (els.historyList) {
+      els.historyList.innerHTML = "";
+    }
 
     try {
       const res = await fetch(`${API_BASE}/history/${GUILD_ID}`);
@@ -209,10 +237,15 @@
       }
       const data = await res.json();
 
-      els.historyLoading.classList.add("hidden");
+      // Hide spinner
+      if (els.historyLoading) {
+        hide(els.historyLoading);
+      }
 
       if (!data.success || !data.history || data.history.length === 0) {
-        els.historyEmpty.classList.remove("hidden");
+        if (els.historyEmpty) {
+          show(els.historyEmpty);
+        }
         return;
       }
 
@@ -241,16 +274,23 @@
           ${messagesHtml}
         `;
 
-        els.historyList.appendChild(div);
+        if (els.historyList) {
+          els.historyList.appendChild(div);
+        }
       });
     } catch (err) {
       console.error("[AI Chat] History load error:", err);
-      els.historyLoading.classList.add("hidden");
-      els.historyEmpty.classList.remove("hidden");
+      if (els.historyLoading) {
+        hide(els.historyLoading);
+      }
+      if (els.historyEmpty) {
+        show(els.historyEmpty);
+      }
     }
   }
 
   function checkApiStatus() {
+    if (!els.apiStatus) return;
     setTimeout(() => {
       els.apiStatus.textContent = "Online";
       els.apiStatus.className = "badge badge-success";
@@ -258,6 +298,7 @@
   }
 
   function showToast(icon, message, type = "success") {
+    if (!els.toast || !els.toastIcon || !els.toastMsg) return;
     els.toastIcon.textContent = icon;
     els.toastMsg.textContent = message;
     const colors = {
@@ -267,12 +308,16 @@
     };
     els.toast.style.borderLeft = `4px solid ${colors[type] || colors.success}`;
     els.toast.classList.remove("hidden");
+    els.toast.style.display = "";
     void els.toast.offsetWidth;
     els.toast.classList.add("show");
 
     setTimeout(() => {
       els.toast.classList.remove("show");
-      setTimeout(() => els.toast.classList.add("hidden"), 300);
+      setTimeout(() => {
+        els.toast.classList.add("hidden");
+        els.toast.style.display = "none";
+      }, 300);
     }, 3000);
   }
 
