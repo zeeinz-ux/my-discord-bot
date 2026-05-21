@@ -1,9 +1,44 @@
 /* ================================================================================
-   JS: AI Chat Settings v4.1 — Hidden Hamlet Dashboard
+   JS: AI Chat Settings v4.2 — Hidden Hamlet Dashboard
+   FIX: Safety check for undefined GUILD_ID, better error handling
    ================================================================================ */
 
 (function () {
+  "use strict";
+
+  // ── Safety Check: Pastikan GUILD_ID tersedia ──
   const GUILD_ID = window.CURRENT_GUILD_ID;
+
+  if (!GUILD_ID || GUILD_ID === "undefined" || GUILD_ID === "") {
+    console.error(
+      "[AI Chat] ❌ CRITICAL: window.CURRENT_GUILD_ID is undefined!",
+    );
+    console.error(
+      "[AI Chat] Pastikan base.html set window.CURRENT_GUILD_ID sebelum ai_chat.js load.",
+    );
+
+    // Fallback: coba extract dari URL
+    const pathMatch = window.location.pathname.match(/\/dashboard\/(\d+)\//);
+    if (pathMatch && pathMatch[1]) {
+      window.CURRENT_GUILD_ID = pathMatch[1];
+      console.warn(
+        "[AI Chat] ⚠️ Fallback: extracted guild_id from URL:",
+        pathMatch[1],
+      );
+    } else {
+      // Show error to user
+      document.body.insertAdjacentHTML(
+        "afterbegin",
+        `
+        <div style="background:#ed4245;color:#fff;padding:1rem;text-align:center;font-weight:bold;">
+          ⚠️ Error: Guild ID tidak terdeteksi. Refresh halaman atau hubungi admin.
+        </div>
+      `,
+      );
+      return; // Stop execution
+    }
+  }
+
   const API_BASE = `/api/ai-chat`;
   const TOGGLE_URL = `/dashboard/${GUILD_ID}/ai-chat/toggle`;
   const SAVE_URL = `/dashboard/${GUILD_ID}/ai-chat/save`;
@@ -26,6 +61,7 @@
   };
 
   async function init() {
+    console.log("[AI Chat] ✅ Initializing with guild_id:", GUILD_ID);
     await loadSettings();
     setupEventListeners();
     await loadHistory();
@@ -35,10 +71,13 @@
   async function loadSettings() {
     try {
       const res = await fetch(`${API_BASE}/settings/${GUILD_ID}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      }
       const data = await res.json();
 
       if (!data.success) {
-        showToast("⚠️", "Gagal memuat pengaturan.", "error");
+        showToast("⚠️", data.message || "Gagal memuat pengaturan.", "error");
         return;
       }
 
@@ -46,16 +85,17 @@
 
       const cfg = data.ai_chat || {};
       if (cfg.personality) els.personality.value = cfg.personality;
-      if (cfg.temperature) {
+      if (cfg.channel_id) els.channel.value = cfg.channel_id;
+      if (cfg.temperature !== undefined && cfg.temperature !== null) {
         els.temperature.value = cfg.temperature;
         els.tempValue.textContent = cfg.temperature;
       }
-      if (cfg.channel_id) els.channel.value = cfg.channel_id;
 
       updateToggleVisuals();
+      console.log("[AI Chat] ✅ Settings loaded:", data);
     } catch (err) {
       console.error("[AI Chat] Error load settings:", err);
-      showToast("⚠️", "Gagal memuat pengaturan.", "error");
+      showToast("⚠️", "Gagal memuat pengaturan. Cek koneksi.", "error");
     }
   }
 
@@ -79,6 +119,10 @@
         body: JSON.stringify({ enabled: enabled }),
       });
 
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
       const data = await res.json();
 
       if (data.success) {
@@ -87,6 +131,7 @@
           `AI Chat ${enabled ? "diaktifkan" : "dinonaktifkan"}.`,
           "success",
         );
+        console.log("[AI Chat] Toggle success:", data);
       } else {
         els.toggle.checked = !enabled;
         updateToggleVisuals();
@@ -131,10 +176,15 @@
         body: JSON.stringify(payload),
       });
 
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
       const data = await res.json();
 
       if (data.success) {
         showToast("✅", "Pengaturan berhasil disimpan!", "success");
+        console.log("[AI Chat] Save success:", data);
       } else {
         showToast("❌", data.message || "Gagal menyimpan.", "error");
       }
@@ -154,6 +204,9 @@
 
     try {
       const res = await fetch(`${API_BASE}/history/${GUILD_ID}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
 
       els.historyLoading.classList.add("hidden");
