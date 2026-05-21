@@ -1,18 +1,18 @@
 """
 ================================================================================
-COG: AI Chat Module v4.2 — Hidden Hamlet Discord Bot
+COG: AI Chat Module v4.3 — Hidden Hamlet Discord Bot
 ================================================================================
 File        : backend/cogs/ai_chat.py
-Deskripsi   : Integrasi Google Gemini AI dengan discord.py v2.x.
+Deskripsi   : Integrasi Google Gemini AI via REST API (aiohttp).
+              • Tidak pakai google-generativeai package (deprecated)
               • Slash command pakai @app_commands.command()
               • Mention handler (@bot)
               • Channel restriction (bisa pilih channel via dashboard)
               • Anti-spam cooldown manual (5 detik/user)
               • Rate limit handling (429/ResourceExhausted)
               • Chat history Firestore (max 5 pasang, slice otomatis)
-              • Smart server info (hanya channel PUBLIK)
-              • FIX v4.2: Async Firestore, no silent return, error handling
-Model       : gemini-2.0-flash (FREE tier)
+Model       : gemini-2.0-flash (FREE tier via REST API)
+API Docs    : https://ai.google.dev/api/generate-content
 ================================================================================
 """
 
@@ -26,9 +26,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-# ── Google Gemini ──
-import google.generativeai as genai
-from google.api_core.exceptions import ResourceExhausted, TooManyRequests
+# ── HTTP Client ──
+import aiohttp
 
 # ── Firebase ──
 from .firebase_setup import db
@@ -37,6 +36,10 @@ from .firebase_setup import db
 MAX_HISTORY_PAIRS = 5          # 5 Q&A = 10 pesan total di Firestore
 COOLDOWN_SECONDS = 5           # Anti-spam per user
 DEFAULT_PERSONALITY = "friendly"
+
+# ── Gemini API Config ──
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+GEMINI_MODEL = "gemini-2.0-flash"
 
 # ── System Prompt Template ──
 SYSTEM_PROMPT_TEMPLATE = """Kamu adalah AI Resmi dari bot Discord "Hidden Hamlet". 
@@ -58,38 +61,38 @@ Aturan:
 
 class AIChat(commands.Cog):
     """
-    Cog AI Chat — mengelola interaksi Gemini AI di Discord.
+    Cog AI Chat — mengelola interaksi Gemini AI di Discord via REST API.
     """
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Manual cooldown storage: {(guild_id, user_id): timestamp}
         self._cooldowns: Dict[tuple, float] = {}
+        self.api_key = os.getenv("GEMINI_API_KEY", "")
 
-        # ── Inisialisasi Gemini ──
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
+        if not self.api_key:
             print("[AI CHAT] ⚠️ GEMINI_API_KEY tidak ditemukan di environment!")
         else:
-            genai.configure(api_key=api_key)
+            print(f"[AI CHAT] ✅ API Key loaded: ...{self.api_key[-4:]}")
 
-        self.model_name = "gemini-2.0-flash"
-        self.generation_config = genai.types.GenerationConfig(
-            max_output_tokens=1024,
-            temperature=0.75,
-            top_p=0.95,
-        )
+        self.session: aiohttp.ClientSession | None = None
+        print(f"[AI CHAT] ✅ Cog loaded. Model: {GEMINI_MODEL} (REST API)")
 
-        print(f"[AI CHAT] ✅ Cog loaded. Model: {self.model_name}")
+    async def cog_load(self):
+        """Initialize aiohttp session when cog loads."""
+        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        self.session = aiohttp.ClientSession(timeout=timeout)
+        print("[AI CHAT] ✅ HTTP session initialized")
+
+    async def cog_unload(self):
+        """Close aiohttp session when cog unloads."""
+        if self.session:
+            await self.session.close()
+            print("[AI CHAT] ✅ HTTP session closed")
 
     # ═══════════════════════════════════════════════════════════════════════
-    # HELPER: Ambil AI Chat settings dari Firestore (ASYNC — non-blocking)
+    # HELPER: Ambil AI Chat settings dari Firestore (ASYNC)
     # ═══════════════════════════════════════════════════════════════════════
     async def _get_guild_ai_settings(self, guild_id: str) -> dict:
-        """
-        Ambil seluruh AI Chat settings untuk guild.
-        Return: {enabled, channel_id, personality, temperature}
-        """
         try:
             doc_ref = db.collection("guild_settings").document(str(guild_id))
             doc = await asyncio.to_thread(doc_ref.get)
@@ -112,10 +115,6 @@ class AIChat(commands.Cog):
     # HELPER: Cek channel restriction
     # ═══════════════════════════════════════════════════════════════════════
     def _is_channel_allowed(self, settings: dict, channel_id: str) -> bool:
-        """
-        Jika channel_id di settings kosong → izinkan SEMUA channel.
-        Jika terisi → hanya izinkan di channel tersebut.
-        """
         allowed_channel = settings.get("channel_id", "")
         if not allowed_channel:
             return True
@@ -147,7 +146,7 @@ class AIChat(commands.Cog):
             return []
 
     # ═══════════════════════════════════════════════════════════════════════
-    # HELPER: Simpan chat history (ASYNC — non-blocking)
+    # HELPER: Simpan chat history (ASYNC)
     # ═══════════════════════════════════════════════════════════════════════
     async def _save_chat_history(
         self,
@@ -206,7 +205,7 @@ class AIChat(commands.Cog):
             return ""
 
     # ═══════════════════════════════════════════════════════════════════════
-    # HELPER: Call Gemini API (async wrapper via to_thread)
+    # HELPER: Call Gemini REST API
     # ═══════════════════════════════════════════════════════════════════════
     async def _call_gemini(
         self,
@@ -214,35 +213,110 @@ class AIChat(commands.Cog):
         history: List[Dict[str, Any]],
         system_prompt: str,
     ) -> str:
+        if not self.api_key:
+            return "❌ GEMINI_API_KEY tidak ditemukan. Hubungi admin bot."
+
+        if not self.session:
+            return "❌ HTTP session belum siap. Coba lagi nanti."
+
         try:
-            model = genai.GenerativeModel(
-                model_name=self.model_name,
-                system_instruction=system_prompt,
-                generation_config=self.generation_config,
-            )
+            # Build contents array from history + current message
+            contents = []
 
-            gemini_history = []
+            # Add system prompt as first user message (Gemini REST API pattern)
+            if system_prompt:
+                contents.append({
+                    "role": "user",
+                    "parts": [{"text": f"[SYSTEM INSTRUCTION]\n{system_prompt}\n\nRespond to the following messages based on the system instruction above."}]
+                })
+                contents.append({
+                    "role": "model",
+                    "parts": [{"text": "Understood. I will follow the system instruction and respond accordingly."}]
+                })
+
+            # Add chat history
             for item in history:
-                role = item["role"]
-                gemini_role = "model" if role == "assistant" else "user"
-                gemini_history.append({"role": gemini_role, "parts": [item["content"]]})
+                role = "model" if item["role"] == "assistant" else "user"
+                contents.append({
+                    "role": role,
+                    "parts": [{"text": item["content"]}]
+                })
 
-            chat = model.start_chat(history=gemini_history)
-            response = await asyncio.to_thread(chat.send_message, user_message)
+            # Add current user message
+            contents.append({
+                "role": "user",
+                "parts": [{"text": user_message}]
+            })
 
-            if response and response.text:
-                return response.text.strip()
-            return "Hmmm, aku blank sebentar... coba tanya lagi? 🤔"
+            # Build request payload
+            payload = {
+                "contents": contents,
+                "generationConfig": {
+                    "temperature": 0.75,
+                    "topP": 0.95,
+                    "maxOutputTokens": 1024,
+                }
+            }
 
-        except (ResourceExhausted, TooManyRequests) as e:
-            print(f"[AI CHAT] ⛔ Rate limit Google: {e}")
-            return (
-                "Waduh, kepala AI-ku lagi pusing nih! 🧠💥\n"
-                "Rate limit dari Google-nya kena. Coba tanya lagi dalam beberapa menit ya, bro!"
-            )
+            url = f"{GEMINI_API_BASE}/models/{GEMINI_MODEL}:generateContent?key={self.api_key}"
+
+            headers = {
+                "Content-Type": "application/json",
+            }
+
+            async with self.session.post(url, headers=headers, json=payload) as resp:
+                status = resp.status
+                response_data = await resp.json()
+
+                if status == 429:
+                    print(f"[AI CHAT] ⛔ Rate limit (429): {response_data}")
+                    return (
+                        "Waduh, kepala AI-ku lagi pusing nih! 🧠💥\n"
+                        "Rate limit dari Google-nya kena. Coba tanya lagi dalam beberapa menit ya, bro!"
+                    )
+
+                if status == 400:
+                    error_msg = response_data.get("error", {}).get("message", "Unknown error")
+                    print(f"[AI CHAT] ❌ Bad Request (400): {error_msg}")
+                    return f"❌ Error dari Google API: {error_msg}"
+
+                if status == 403:
+                    print(f"[AI CHAT] ❌ Forbidden (403): API key invalid or expired")
+                    return "❌ API key tidak valid atau expired. Hubungi admin."
+
+                if status != 200:
+                    print(f"[AI CHAT] ❌ HTTP {status}: {response_data}")
+                    return f"❌ Error dari Google API (HTTP {status}). Coba lagi nanti."
+
+                # Extract response text
+                candidates = response_data.get("candidates", [])
+                if not candidates:
+                    print(f"[AI CHAT] ⚠️ No candidates in response: {response_data}")
+                    return "Hmmm, aku blank sebentar... coba tanya lagi? 🤔"
+
+                content = candidates[0].get("content", {})
+                parts = content.get("parts", [])
+
+                if not parts:
+                    return "Hmmm, aku blank sebentar... coba tanya lagi? 🤔"
+
+                response_text = parts[0].get("text", "").strip()
+
+                if not response_text:
+                    return "Hmmm, aku blank sebentar... coba tanya lagi? 🤔"
+
+                return response_text
+
+        except asyncio.TimeoutError:
+            print("[AI CHAT] ⏱️ Timeout: Gemini API tidak merespons dalam 30 detik")
+            return "⏱️ Timeout! AI-nya lagi lambat nih, coba tanya lagi ya."
+
+        except aiohttp.ClientError as e:
+            print(f"[AI CHAT] ❌ HTTP Client Error: {e}")
+            return "❌ Koneksi ke Google API bermasalah. Coba lagi nanti."
 
         except Exception as e:
-            print(f"[AI CHAT] ❌ Error Gemini: {e}")
+            print(f"[AI CHAT] ❌ Error Gemini REST: {e}")
             traceback.print_exc()
             return "Aduh, ada error di otakku... coba lagi nanti ya! 🛠️"
 
@@ -250,9 +324,7 @@ class AIChat(commands.Cog):
     # HELPER: Kirim balasan (handle Interaction vs Message)
     # ═══════════════════════════════════════════════════════════════════════
     async def _send_response(self, ctx, text: str):
-        """Kirim balasan sesuai tipe context (Interaction atau Message)."""
         if isinstance(ctx, discord.Interaction):
-            # Slash command: pakai followup (karena sudah defer)
             if len(text) > 2000:
                 chunks = [text[i : i + 1900] for i in range(0, len(text), 1900)]
                 await ctx.followup.send(chunks[0])
@@ -261,7 +333,6 @@ class AIChat(commands.Cog):
             else:
                 await ctx.followup.send(text)
         else:
-            # Mention: pakai reply
             if len(text) > 2000:
                 chunks = [text[i : i + 1900] for i in range(0, len(text), 1900)]
                 for idx, chunk in enumerate(chunks):
@@ -339,14 +410,11 @@ class AIChat(commands.Cog):
         await self._send_response(ctx, response_text)
 
     # ═══════════════════════════════════════════════════════════════════════
-    # SLASH COMMAND: /ask (discord.py v2.x — pakai app_commands)
+    # SLASH COMMAND: /ask
     # ═══════════════════════════════════════════════════════════════════════
     @app_commands.command(name="ask", description="Tanya apa saja ke AI Gemini Hidden Hamlet")
     @app_commands.describe(pertanyaan="Apa yang mau ditanyakan?")
     async def ask(self, interaction: discord.Interaction, pertanyaan: str):
-        """
-        Slash command /ask dengan manual cooldown (5 detik per user).
-        """
         guild_id = str(interaction.guild_id)
         user_id = str(interaction.user.id)
         now = datetime.now(timezone.utc).timestamp()
@@ -381,7 +449,7 @@ class AIChat(commands.Cog):
             try:
                 await interaction.followup.send("❌ Terjadi error internal. Coba lagi nanti ya!")
             except Exception:
-                pass  # Interaction token sudah expired
+                pass
 
     # ═══════════════════════════════════════════════════════════════════════
     # EVENT LISTENER: Mention @HiddenHamlet di text channel
@@ -396,7 +464,7 @@ class AIChat(commands.Cog):
         # ── Cek apakah AI Chat aktif untuk guild ini ──
         settings = await self._get_guild_ai_settings(str(message.guild.id))
         if not settings.get("enabled", False):
-            return  # Silent ignore kalau fitur mati (mention tidak perlu respon)
+            return
 
         # ── Cek mention ──
         bot_mentioned = (
@@ -408,7 +476,7 @@ class AIChat(commands.Cog):
 
         # ── Cek channel restriction ──
         if not self._is_channel_allowed(settings, str(message.channel.id)):
-            return  # Silent ignore kalau channel salah
+            return
 
         # ── Extract text setelah mention ──
         content = message.content.replace(f"<@{self.bot.user.id}>", "").replace(
@@ -454,4 +522,6 @@ class AIChat(commands.Cog):
 # SETUP: Async setup untuk discord.py v2.x
 # ═══════════════════════════════════════════════════════════════════════════
 async def setup(bot: commands.Bot):
-    await bot.add_cog(AIChat(bot))
+    cog = AIChat(bot)
+    await bot.add_cog(cog)
+    await cog.cog_load()  # Initialize HTTP session
