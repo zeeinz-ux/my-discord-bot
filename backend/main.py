@@ -24,7 +24,7 @@ from backend.cogs import firebase_setup
 # ============================================
 
 # ===== [DASHBOARD] Import Flask app dari web/ =====
-from backend.web.web_app import app, set_stats, set_guild_channels
+from backend.web.web_app import app, set_stats, set_guild_channels, set_bot_instance
 # ==================================================
 
 # ===== [UTILS] Shared constants =====
@@ -38,6 +38,9 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 start_time = time.time()
+
+# Berikan instance bot ke web app
+set_bot_instance(bot)
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
