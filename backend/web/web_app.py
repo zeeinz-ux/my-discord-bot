@@ -335,7 +335,7 @@ def auto_responders(guild_id: str):
     return _render_page("auto_responders.html", active_page="auto_responders", guild_id=guild_id)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ROUTES — AI Chat v4.1 (Gemini + Channel Restriction)
+# ROUTES — AI Chat v4.5 (Gemini 2.5 Flash + OpenRouter + Temperature Support)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/dashboard/<guild_id>/ai-chat")
@@ -385,7 +385,7 @@ def ai_chat_save(guild_id):
 
         personality = data.get("personality", "friendly")
         channel_id = data.get("channel_id", "").strip()
-        model = data.get("model", "gemini-2.0-flash")
+        model = data.get("model", "gemini-2.5-flash")
         temperature = float(data.get("temperature", 0.75))
 
         valid_personalities = ["friendly", "formal", "tsundere", "sarcastic", "wise"]
@@ -426,7 +426,7 @@ def api_ai_chat_settings(guild_id):
                 "ai_chat": {
                     "personality": "friendly",
                     "channel_id": "",
-                    "model": "gemini-2.0-flash",
+                    "model": "gemini-2.5-flash",
                     "temperature": 0.75,
                 }
             }), 200
@@ -441,7 +441,7 @@ def api_ai_chat_settings(guild_id):
                 "ai_chat": {
                     "personality": "friendly",
                     "channel_id": "",
-                    "model": "gemini-2.0-flash",
+                    "model": "gemini-2.5-flash",
                     "temperature": 0.75,
                 }
             }), 200
@@ -454,7 +454,7 @@ def api_ai_chat_settings(guild_id):
             "ai_chat": {
                 "personality": ai_chat.get("personality", "friendly"),
                 "channel_id": ai_chat.get("channel_id", ""),
-                "model": ai_chat.get("model", "gemini-2.0-flash"),
+                "model": ai_chat.get("model", "gemini-2.5-flash"),
                 "temperature": ai_chat.get("temperature", 0.75),
             }
         }), 200
