@@ -1,0 +1,204 @@
+/* ==========================================================
+   Queue Page Styles - Standalone
+   ========================================================== */
+
+:root {
+  /* ── Palet Warna Dasar ── */
+  --bg-primary: #121214;
+  --bg-card: #1A1C20;
+  --bg-bar: #2A2D33;
+  --text-primary: #E6E6E6;
+  --text-secondary: #A0A0A0;
+  --text-muted: #72767d;
+  --border-color: #2A2D33;
+  
+  /* ── Warna Aksen ── */
+  --accent-red: #DA3633;
+  --accent-red-hover: #F85149;
+
+  /* ── Font & Transisi ── */
+  --font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --transition-fast: 0.2s;
+}
+
+/* ==========================================================
+   Queue Container
+   ========================================================== */
+
+.queue-container {
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  font-family: var(--font-family);
+}
+
+/* ==========================================================
+   Queue Header
+   ========================================================== */
+
+.queue-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.queue-header h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* ==========================================================
+   Queue Actions (Buttons)
+   ========================================================== */
+
+.queue-actions .btn {
+  padding: 0.6rem 1.2rem;
+  font-size: 0.9rem;
+  border-radius: 6px;
+  cursor: pointer;
+  border: none;
+  transition: background-color var(--transition-fast);
+}
+
+.btn-secondary {
+  background-color: #4F4F4F; /* Specific color from original */
+  color: #E0E0E0;
+}
+
+.btn-secondary:hover {
+  background-color: #5A5A5A;
+}
+
+.btn-danger {
+  background-color: var(--accent-red);
+  color: white;
+}
+
+.btn-danger:hover {
+  background-color: var(--accent-red-hover);
+}
+
+/* ==========================================================
+   Queue Info
+   ========================================================== */
+
+.queue-info {
+  display: flex;
+  gap: 2rem;
+  margin-bottom: 2rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+/* ==========================================================
+   Queue List Container
+   ========================================================== */
+
+.queue-list-container {
+  background-color: var(--bg-card);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* ==========================================================
+   Queue Item
+   ========================================================== */
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color var(--transition-fast);
+}
+
+.queue-item:last-child {
+  border-bottom: none;
+}
+
+.queue-item:hover {
+  background-color: var(--bg-bar);
+}
+
+/* ==========================================================
+   Track Details
+   ========================================================== */
+
+.queue-item .track-position {
+  color: var(--text-secondary);
+  width: 30px;
+  font-size: 0.9rem;
+}
+
+.queue-item .track-artwork {
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
+  margin-right: 1rem;
+  object-fit: cover;
+  background-color: var(--bg-bar);
+}
+
+.queue-item .track-details {
+  flex-grow: 1;
+}
+
+.track-details .track-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+  font-size: 1rem;
+}
+
+.track-details .track-author {
+  color: var(--text-secondary);
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.queue-item .track-duration {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  min-width: 60px;
+  text-align: right;
+}
+
+/* ==========================================================
+   Track Actions (Hover)
+   ========================================================== */
+
+.queue-item .track-actions {
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  margin-left: 1rem;
+}
+
+.queue-item:hover .track-actions {
+  opacity: 1;
+}
+
+.track-actions .action-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.3rem;
+}
+
+.track-actions .action-btn:hover {
+  color: var(--text-primary);
+}
+
+/* ==========================================================
+   Placeholder (Empty State)
+   ========================================================== */
+
+.queue-item-placeholder {
+  text-align: center;
+  padding: 4rem;
+  color: var(--text-secondary);
+}
