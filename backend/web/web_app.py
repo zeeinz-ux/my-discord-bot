@@ -1,10 +1,12 @@
-
-
 import os
 import threading
 import base64
 import traceback
 import io
+import json
+import uuid
+import time
+from collections import deque
 from flask import Flask, render_template, jsonify, request, redirect
 from datetime import datetime, timezone
 from PIL import Image
@@ -98,6 +100,48 @@ def set_guild_channels(guild_id: str, channels: list):
 def get_guild_channels(guild_id: str) -> list:
     with _guild_lock:
         return _guild_channels.get(guild_id, [])
+
+# ==========================================================
+# Shared Music State (thread-safe) — v4.6 Music Dashboard
+# ==========================================================
+_music_lock = threading.Lock()
+_music_state_cache: dict = {}        # {guild_id: player_state_dict}
+_music_voice_channels: dict = {}     # {guild_id: [{id, name}]}
+_music_commands: deque = deque()     # [(scope, payload), ...]
+
+def set_music_state(guild_id: str, state: dict):
+    with _music_lock:
+        _music_state_cache[guild_id] = state
+
+def get_music_state(guild_id: str) -> dict:
+    with _music_lock:
+        return _music_state_cache.get(guild_id, {"connected": False})
+
+def set_music_voice_channels(guild_id: str, channels: list):
+    with _music_lock:
+        _music_voice_channels[guild_id] = channels
+
+def get_music_voice_channels(guild_id: str) -> list:
+    with _music_lock:
+        return _music_voice_channels.get(guild_id, [])
+
+def push_music_command(scope: str, payload: dict) -> str:
+    cmd_id = str(uuid.uuid4())
+    with _music_lock:
+        _music_commands.append({
+            "id": cmd_id,
+            "scope": scope,
+            "payload": payload,
+            "ts": time.time(),
+        })
+    return cmd_id
+
+def pop_music_commands(max_n: int = 20) -> list:
+    with _music_lock:
+        cmds = []
+        while _music_commands and len(cmds) < max_n:
+            cmds.append(_music_commands.popleft())
+        return cmds
 
 # ==========================================================
 # Helper — baca config welcome dari Firestore
@@ -235,19 +279,29 @@ def settings_page(guild_id: str):
     return _render_page("settings.html", active_page="settings", guild_id=guild_id)
 
 # ==========================================================
-# ROUTES — Music (placeholder)
+# ROUTES — Music v4.6 (Now Playing, Queue, Playlists)
 # ==========================================================
 @app.route("/dashboard/<guild_id>/music")
-def music_settings(guild_id: str):
-    return _render_page("music_settings.html", active_page="music", guild_id=guild_id)
+def music_redirect(guild_id: str):
+    return redirect(f"/dashboard/{guild_id}/music/now-playing")
+
+@app.route("/dashboard/<guild_id>/music/now-playing")
+def music_now_playing(guild_id: str):
+    channels = get_music_voice_channels(guild_id)
+    return _render_page(
+        "now_playing.html",
+        active_page="now_playing",
+        guild_id=guild_id,
+        channels=channels,
+    )
 
 @app.route("/dashboard/<guild_id>/music/queue")
-def music_queue(guild_id: str):
-    return _render_page("music_settings.html", active_page="queue", guild_id=guild_id)
+def music_queue_page(guild_id: str):
+    return _render_page("queue.html", active_page="queue", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/music/playlists")
-def music_playlists(guild_id: str):
-    return _render_page("music_settings.html", active_page="playlists", guild_id=guild_id)
+def music_playlists_page(guild_id: str):
+    return _render_page("playlist.html", active_page="playlists", guild_id=guild_id)
 
 # ==========================================================
 # ROUTES — Welcome / Announcements
@@ -500,6 +554,87 @@ def api_ai_chat_history(guild_id):
 
         return jsonify({"success": True, "history": results}), 200
 
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+# ==========================================================
+# ROUTES — Music API v4.6 (Status, Channels, Control, Queue, Playlist)
+# ==========================================================
+
+@app.route("/api/music/status")
+def api_music_status():
+    guild_id = request.args.get("guild_id", "")
+    return jsonify(get_music_state(guild_id))
+
+
+@app.route("/api/music/channels")
+def api_music_channels():
+    guild_id = request.args.get("guild_id", "")
+    return jsonify({"channels": get_music_voice_channels(guild_id)})
+
+
+@app.route("/api/music/control", methods=["POST"])
+def api_music_control():
+    data = request.get_json() or {}
+    guild_id = data.get("guild_id")
+    action = data.get("action")
+    if not guild_id or not action:
+        return jsonify({"success": False, "message": "Missing guild_id or action"}), 400
+    cmd_id = push_music_command("now_playing", data)
+    return jsonify({"success": True, "command_id": cmd_id})
+
+
+@app.route("/api/music/queue")
+def api_music_queue():
+    guild_id = request.args.get("guild_id", "")
+    state = get_music_state(guild_id)
+    return jsonify({
+        "queue": state.get("queue", []),
+        "total": state.get("queue_count", 0),
+        "duration": state.get("queue_duration", 0),
+    })
+
+
+@app.route("/api/music/queue", methods=["POST"])
+def api_music_queue_action():
+    data = request.get_json() or {}
+    guild_id = data.get("guild_id")
+    action = data.get("action")
+    if not guild_id or not action:
+        return jsonify({"success": False, "message": "Missing params"}), 400
+    cmd_id = push_music_command("queue", data)
+    return jsonify({"success": True, "command_id": cmd_id})
+
+
+@app.route("/api/music/queue/bulk", methods=["POST"])
+def api_music_queue_bulk():
+    data = request.get_json() or {}
+    guild_id = data.get("guild_id")
+    if not guild_id:
+        return jsonify({"success": False, "message": "Missing guild_id"}), 400
+    cmd_id = push_music_command("playlist", data)
+    return jsonify({"success": True, "command_id": cmd_id})
+
+
+@app.route("/api/music/playlists/sync", methods=["POST"])
+def api_music_playlists_sync():
+    data = request.get_json() or {}
+    guild_id = data.get("guild_id")
+    playlists = data.get("playlists", [])
+    if not guild_id:
+        return jsonify({"success": False, "message": "Missing guild_id"}), 400
+    try:
+        os.makedirs("data", exist_ok=True)
+        path = os.path.join("data", f"playlists_{guild_id}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({
+                "guild_id": guild_id,
+                "synced_at": datetime.now(timezone.utc).isoformat(),
+                "playlists": playlists,
+            }, f, indent=2, ensure_ascii=False)
+        return jsonify({"success": True, "saved": len(playlists)})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "message": str(e)}), 500
