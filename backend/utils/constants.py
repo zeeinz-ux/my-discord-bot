@@ -1,17 +1,17 @@
 LAVALINK_NODES = [
-    # Node 1: Singapura (NyxBot) - Telah diverifikasi, prioritas utama untuk latensi rendah.
+    # Node 1: ajieblogs (Terbukti berfungsi dari tes lokal Anda)
     {
-        "uri": "http://sg1-nodelink.nyxbot.app:3000",
-        "password": "nyxbot.app/support",
+        "uri": "https://lava-v4.ajieblogs.eu.org:443",
+        "password": "https://dsc.gg/ajieblogs",
     },
-    # Node 2: Jirayu (Global) - Telah diverifikasi, cadangan global yang solid.
+    # Node 2: Cadangan umum yang andal
     {
-        "uri": "http://lavalink.jirayu.net:13592",
+        "uri": "http://lava.link:80",
         "password": "youshallnotpass",
     },
-    # Node 3: TriniumHost (Global) - Telah diverifikasi, cadangan global yang solid.
+    # Node 3: Cadangan umum lainnya
     {
-        "uri": "http://lavalink.triniumhost.com:4333",
-        "password": "free",
+        "uri": "http://lavalink-coders.ml:80",
+        "password": "Lavalink",
     },
 ]
