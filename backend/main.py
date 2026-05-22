@@ -20,7 +20,7 @@ import asyncio
 load_dotenv()
 
 # ===== INIT FIREBASE SEBELUM LOAD COGS =====
-from backend.cogs import firebase_setup
+from backend.cogs.firebase_setup import initialize_firestore
 # ============================================
 
 # ===== [DASHBOARD] Import Flask app dari web/ =====
@@ -37,6 +37,11 @@ intents.message_content = True
 intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# ===== MODIFIED: Initialize and attach Firestore =====
+bot.db = initialize_firestore()
+# ===================================================
+
 start_time = time.time()
 
 # Berikan instance bot ke web app
