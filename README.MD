@@ -1,55 +1,70 @@
-# 🤖 Hidden Hamlet — Discord Bot v4.4.1
+# 🤖 Hidden Hamlet — Discord Bot v4.6
 
-Bot Discord all-in-one dengan fitur tracking server boost, pencatatan donasi, music player kualitas jernih dari YouTube & Spotify, **welcome announcement otomatis (dual style: Embed + Banner)**, **web dashboard real-time dengan sidebar navigation**, dan **AI Chat powered by Google Gemini + OpenRouter**. Support 24/7 via UptimeRobot.
+Bot Discord all-in-one dengan fitur tracking server boost, pencatatan donasi, music player kualitas jernih dari YouTube & Spotify, **welcome announcement otomatis (dual style: Embed + Banner)**, **web dashboard real-time dengan sidebar navigation**, dan **AI Chat powered by Triple API Fallback (Gemini → Groq → OpenRouter) dengan Lightweight Circuit Breaker**. Support 24/7 via UptimeRobot.
 
 ---
 
 ## ✨ Fitur
 
-| Fitur                       | Deskripsi                                                                        |
-| --------------------------- | -------------------------------------------------------------------------------- |
-| 🚀 **Auto Boost Detection** | Deteksi otomatis member yang boost/unboost server                                |
-| 💰 **Donasi Tracker**       | Catat donasi dengan `/donasi`                                                    |
-| 📊 **Cek Riwayat Boost**    | Cek status boost user dengan `/cekboost`                                         |
-| 🧪 **Simulasi Boost**       | Testing boost dengan `/testboost` (Admin only)                                   |
-| 🎵 **Music Player**         | Putar lagu dari **YouTube** & **Spotify** dengan kualitas **320kbps**            |
-| 👋 **Welcome Announcement** | Sambut member baru otomatis — **Embed Style** atau **Banner Style** |
-| 📊 **Web Dashboard**        | Status bot real-time + pengaturan per server dengan sidebar navigation           |
-| 🧠 **AI Chat**              | Chat bot AI powered by **Google Gemini API** + **OpenRouter fallback**           |
-| 🔥 **Firebase Firestore**   | Database real-time + **base64 image storage (100% free)**                        |
-| 🌐 **24/7 Uptime**          | Flask server untuk UptimeRobot ping                                              |
-| 🔒 **Secure**               | Token & key disimpan di environment variables                                    |
-| 🔄 **Cogs System**          | Modular — tiap fitur di file terpisah                                            |
+| Fitur                       | Deskripsi                                                              |
+| --------------------------- | ---------------------------------------------------------------------- |
+| 🚀 **Auto Boost Detection** | Deteksi otomatis member yang boost/unboost server                      |
+| 💰 **Donasi Tracker**       | Catat donasi dengan `/donasi`                                          |
+| 📊 **Cek Riwayat Boost**    | Cek status boost user dengan `/cekboost`                               |
+| 🧪 **Simulasi Boost**       | Testing boost dengan `/testboost` (Admin only)                         |
+| 🎵 **Music Player**         | Putar lagu dari **YouTube** & **Spotify** dengan kualitas **320kbps**  |
+| 👋 **Welcome Announcement** | Sambut member baru otomatis — **Embed Style** atau **Banner Style**    |
+| 📊 **Web Dashboard**        | Status bot real-time + pengaturan per server dengan sidebar navigation |
+| 🧠 **AI Chat**              | Chat bot AI powered by **Triple API Fallback** + **Circuit Breaker**   |
+| 🔥 **Firebase Firestore**   | Database real-time + **base64 image storage (100% free)**              |
+| 🌐 **24/7 Uptime**          | Flask server untuk UptimeRobot ping                                    |
+| 🔒 **Secure**               | Token & key disimpan di environment variables                          |
+| 🔄 **Cogs System**          | Modular — tiap fitur di file terpisah                                  |
 
 ---
 
-## 🧠 AI Chat (v4.4)
+## 🧠 AI Chat (v4.6)
 
-Chat bot AI dengan **dual API support** — Google AI Studio (primary) + OpenRouter (fallback).
+Chat bot AI dengan **Triple API Fallback** dan **Lightweight Circuit Breaker** — arsitektur 3-tier yang auto-switch tanpa restart bot.
+
+### Arsitektur 3-Tier:
+
+```
+Tier 1: Google AI Studio (Gemini 2.5 Flash)     ← Primary
+   ↓  fail 3x berturut-turut / quota habis
+   ↓  Circuit Breaker: auto-skip 2 jam
+Tier 2: Groq (Llama 3.3 70B Versatile)         ← Backup
+   ↓  fail / rate limit
+Tier 3: OpenRouter (Gemini 2.5 Flash Free)       ← Last Resort
+   ↓  fail
+Error Message ke User
+```
 
 ### Fitur AI Chat:
 
-| Fitur                         | Deskripsi                                            |
-| ----------------------------- | ---------------------------------------------------- |
-| **Dual API**                  | Google AI Studio (native Gemini) + OpenRouter fallback |
-| **Auto Fallback**             | Kalau Google quota 0 / rate limit → auto switch ke OpenRouter |
-| **Personality Customization** | Atur gaya bicara AI: friendly, formal, tsundere, sarcastic, wise |
-| **Channel Restriction**       | Batasi AI hanya merespons di channel tertentu        |
-| **Chat History**              | Simpan percakapan per user & per server di Firestore (max 5 Q&A) |
-| **Context-Aware**             | AI ingat percakapan sebelumnya dalam session         |
-| **Dashboard Settings**        | Atur personality, channel, temperature, toggle ON/OFF |
-| **Usage Stats**               | Chat history per user di dashboard                   |
-| **Commands**                  | `/ask` (slash command), mention `@Hidden Hamlet`     |
-| **Anti-Spam**                 | Cooldown 5 detik per user                            |
-| **Rate Limit Handling**       | Handle Google 429 / OpenRouter rate limit gracefully |
+| Fitur                         | Deskripsi                                                                          |
+| ----------------------------- | ---------------------------------------------------------------------------------- |
+| **Triple API Fallback**       | Google AI Studio (primary) → Groq (backup) → OpenRouter (last resort)              |
+| **Circuit Breaker**           | Gemini auto-skip 2 jam setelah 3x fail berturut-turut, menghindari latency timeout |
+| **Personality Customization** | Atur gaya bicara AI: friendly, formal, tsundere, sarcastic, wise                   |
+| **Channel Restriction**       | Batasi AI hanya merespons di channel tertentu                                      |
+| **Chat History**              | Simpan percakapan per user & per server di Firestore (max 5 Q&A)                   |
+| **Context-Aware**             | AI ingat percakapan sebelumnya dalam session                                       |
+| **Dashboard Settings**        | Atur personality, channel, temperature, toggle ON/OFF                              |
+| **Usage Stats**               | Chat history per user di dashboard                                                 |
+| **Commands**                  | `/ask` (slash command), mention `@Hidden Hamlet`                                   |
+| **Anti-Spam**                 | Cooldown 5 detik per user                                                          |
+| **Compact Logging**           | 1 baris log per tier switch, tidak ada stack trace untuk error kosmetik            |
 
 ### AI Chat Commands:
 
 ```markdown
 # Tanya via slash command
+
 /ask pertanyaan: halo bot, apa kabar?
 
 # Tanya via mention
+
 @Hidden Hamlet halo, ceritain tentang server ini dong
 ```
 
@@ -61,15 +76,15 @@ http://your-bot-url/dashboard/<guild_id>/ai-chat
 
 ### AI Chat Dashboard Features:
 
-| Opsi                    | Deskripsi                                                                 |
-| ----------------------- | ------------------------------------------------------------------------- |
-| **Toggle On/Off**       | Aktifkan/nonaktifkan AI Chat di server                                    |
-| **Channel Selection**   | Pilih channel khusus untuk AI Chat (kosong = semua channel)              |
-| **Personality Selector**| Pilih gaya bicara: friendly, formal, tsundere, sarcastic, wise             |
-| **Temperature Slider**  | Atur kreativitas AI (0 = deterministik, 1 = sangat kreatif)              |
-| **Model Info**          | Display model yang digunakan (Gemini Flash 2.5)                          |
-| **Chat History**        | Lihat riwayat percakapan per user                                         |
-| **Rate Limit Info**     | Info quota gratis Google AI Studio                                        |
+| Opsi                                  | Deskripsi                                                      |
+| ------------------------------------- | -------------------------------------------------------------- |
+| **Toggle On/Off**                     | Aktifkan/nonaktifkan AI Chat di server                         |
+| **Channel Selection**                 | Pilih channel khusus untuk AI Chat (kosong = semua channel)    |
+| **Personality Selector**              | Pilih gaya bicara: friendly, formal, tsundere, sarcastic, wise |
+| **Temperature Slider**                | Atur kreativitas AI (0 = deterministik, 1 = sangat kreatif)    |
+| **AI Engine Stack Display**           | Visualisasi 3-tier architecture (Gemini → Groq → OpenRouter)   |
+| **Chat History**                      | Lihat riwayat percakapan per user                              |
+| **Rate Limit & Circuit Breaker Info** | Info quota dan mekanisme auto-recovery                         |
 
 ### Firestore Schema (AI Chat):
 
@@ -80,18 +95,27 @@ http://your-bot-url/dashboard/<guild_id>/ai-chat
     "channel_id": "123456789012345678",
     "personality": "friendly",
     "temperature": 0.75,
-    "model": "gemini-flash-2.5"
+    "model": "gemini-2.5-flash"
   }
 }
 ```
 
 User history disimpan di sub-collection:
+
 ```json
 // guild_settings/{guild_id}/ai_chat/{user_id}
 {
   "history": [
-    {"role": "user", "content": "halo bot", "timestamp": "2026-05-21T10:00:00Z"},
-    {"role": "assistant", "content": "Halo! Ada yang bisa kubantu?", "timestamp": "2026-05-21T10:00:01Z"}
+    {
+      "role": "user",
+      "content": "halo bot",
+      "timestamp": "2026-05-21T10:00:00Z"
+    },
+    {
+      "role": "assistant",
+      "content": "Halo! Ada yang bisa kubantu?",
+      "timestamp": "2026-05-21T10:00:01Z"
+    }
   ],
   "personality": "friendly",
   "updated_at": "timestamp"
@@ -100,7 +124,7 @@ User history disimpan di sub-collection:
 
 ---
 
-## 👋 Welcome Announcement (v3.7.3)
+## 👋 Welcome Announcement (v3.7.6)
 
 Kirim pesan sambutan otomatis saat member baru bergabung ke server. **Dua style pilihan:**
 
@@ -118,7 +142,7 @@ Image banner dengan avatar user, text overlay, dan background custom.
 http://your-bot-url/dashboard/<guild_id>/welcome
 ```
 
-### Fitur Welcome v3.7.3:
+### Fitur Welcome v3.7.6:
 
 | Opsi                    | Deskripsi                                                                                |
 | ----------------------- | ---------------------------------------------------------------------------------------- |
@@ -148,7 +172,7 @@ http://your-bot-url/dashboard/<guild_id>/welcome
 | `{server}`  | Nama server Discord             |
 | `{count}`   | Nomor member ke-berapa          |
 
-### Firestore Schema (v3.7.3):
+### Firestore Schema (v3.7.6):
 
 ```json
 {
@@ -170,7 +194,7 @@ http://your-bot-url/dashboard/<guild_id>/welcome
 }
 ```
 
-> **Note v3.7.3**: Gambar disimpan sebagai **base64 string** di Firestore (tidak perlu Catbox, Imgur, atau Firebase Storage). Auto-compress kalau >400KB.
+> **Note v3.7.6**: Gambar disimpan sebagai **base64 string** di Firestore (tidak perlu Catbox, Imgur, atau Firebase Storage). Auto-compress kalau >400KB.
 
 ---
 
@@ -211,35 +235,35 @@ http://your-bot-url/dashboard/<guild_id>/welcome
 
 ---
 
-## 📊 Web Dashboard (v4.4)
+## 📊 Web Dashboard (v4.6)
 
 Dashboard dengan **sidebar navigation** untuk akses cepat semua fitur per server.
 
 ### URL Routes
 
-| URL                                     | Deskripsi                                      |
-| --------------------------------------- | ---------------------------------------------- |
-| `/`                                     | Landing page — links ke Dashboard & API        |
-| `/dashboard`                            | Redirect ke server pertama                     |
-| `/dashboard/<guild_id>/`                | Main dashboard dengan stats real-time          |
-| `/dashboard/<guild_id>/welcome`         | Pengaturan welcome (Embed + Banner dual style) |
-| `/dashboard/<guild_id>/welcome/leave`   | Leave announcement (placeholder)               |
-| `/dashboard/<guild_id>/welcome/ban`     | Ban announcement (placeholder)                 |
-| `/dashboard/<guild_id>/welcome/boost`   | Boost welcome (placeholder)                    |
-| `/dashboard/<guild_id>/music`           | Music player controls (placeholder)            |
-| `/dashboard/<guild_id>/music/queue`     | Queue manager (placeholder)                    |
-| `/dashboard/<guild_id>/music/playlists` | Playlist manager (placeholder)                 |
-| `/dashboard/<guild_id>/boost`           | Boost tracker riwayat (placeholder)            |
-| `/dashboard/<guild_id>/donation`        | Donation riwayat (placeholder)                 |
-| `/dashboard/<guild_id>/ai-chat`         | **AI Chat settings**                           |
-| `/dashboard/<guild_id>/settings`        | Bot settings (placeholder)                     |
-| `/dashboard/<guild_id>/message-builder` | Message builder (placeholder)                  |
-| `/dashboard/<guild_id>/templates`       | Templates (placeholder)                        |
-| `/dashboard/<guild_id>/actions`         | Auto actions (placeholder)                     |
-| `/dashboard/<guild_id>/auto-responders` | Auto responders (placeholder)                  |
-| `/api/stats`                            | JSON API untuk integrasi eksternal             |
-| `/api/ai-chat/settings/<guild_id>`      | AI Chat settings API                           |
-| `/api/ai-chat/history/<guild_id>`       | AI Chat history API                            |
+| URL                                     | Deskripsi                                           |
+| --------------------------------------- | --------------------------------------------------- |
+| `/`                                     | Landing page — links ke Dashboard & API             |
+| `/dashboard`                            | Redirect ke server pertama                          |
+| `/dashboard/<guild_id>/`                | Main dashboard dengan stats real-time               |
+| `/dashboard/<guild_id>/welcome`         | Pengaturan welcome (Embed + Banner dual style)      |
+| `/dashboard/<guild_id>/welcome/leave`   | Leave announcement (placeholder)                    |
+| `/dashboard/<guild_id>/welcome/ban`     | Ban announcement (placeholder)                      |
+| `/dashboard/<guild_id>/welcome/boost`   | Boost welcome (placeholder)                         |
+| `/dashboard/<guild_id>/music`           | Music player controls (placeholder)                 |
+| `/dashboard/<guild_id>/music/queue`     | Queue manager (placeholder)                         |
+| `/dashboard/<guild_id>/music/playlists` | Playlist manager (placeholder)                      |
+| `/dashboard/<guild_id>/boost`           | Boost tracker riwayat (placeholder)                 |
+| `/dashboard/<guild_id>/donation`        | Donation riwayat (placeholder)                      |
+| `/dashboard/<guild_id>/ai-chat`         | **AI Chat settings (Triple API + Circuit Breaker)** |
+| `/dashboard/<guild_id>/settings`        | Bot settings (placeholder)                          |
+| `/dashboard/<guild_id>/message-builder` | Message builder (placeholder)                       |
+| `/dashboard/<guild_id>/templates`       | Templates (placeholder)                             |
+| `/dashboard/<guild_id>/actions`         | Auto actions (placeholder)                          |
+| `/dashboard/<guild_id>/auto-responders` | Auto responders (placeholder)                       |
+| `/api/stats`                            | JSON API untuk integrasi eksternal                  |
+| `/api/ai-chat/settings/<guild_id>`      | AI Chat settings API                                |
+| `/api/ai-chat/history/<guild_id>`       | AI Chat history API                                 |
 
 ### Dashboard Menampilkan
 
@@ -259,7 +283,7 @@ Dashboard dengan **sidebar navigation** untuk akses cepat semua fitur per server
 
 ---
 
-## 📁 Struktur Project (v4.4 — Frontend/Backend Separation)
+## 📁 Struktur Project (v4.6 — Frontend/Backend Separation)
 
 ```
 my-discord-bot/
@@ -271,13 +295,13 @@ my-discord-bot/
 │   ├── serviceAccountKey.json  # Firebase private key (JANGAN DI-COMMIT!)
 │   ├── cogs/                   # Discord bot cogs
 │   │   ├── __init__.py
-│   │   ├── ai_chat.py          # AI Chat v4.4 (Dual API: Google + OpenRouter)
+│   │   ├── ai_chat.py          # AI Chat v4.6 (Triple API + Circuit Breaker)
 │   │   ├── music.py            # Music Player (Lavalink/Wavelink)
 │   │   ├── spotify_down.py     # Spotify resolver utility (NOT a cog)
 │   │   ├── general.py          # Ping, stats, help commands
 │   │   ├── boost.py            # Boost Tracker
 │   │   ├── donation.py         # Donation Tracker
-│   │   ├── welcome.py          # Welcome Announcement v3.7.3 
+│   │   ├── welcome.py          # Welcome Announcement v3.7.6
 │   │   └── firebase_setup.py   # Firebase Firestore initialization (FREE tier)
 │   ├── utils/                  # Shared helpers
 │   │   ├── __init__.py
@@ -285,7 +309,7 @@ my-discord-bot/
 │   │   └── formatters.py       # format_duration(), format_uptime()
 │   └── web/                    # Flask web server
 │       ├── __init__.py
-│       └── web_app.py          # Flask routes v4.4 (AI Chat API + base64 image + auto-compress)
+│       └── web_app.py          # Flask routes v4.6 (AI Chat API + base64 image + auto-compress)
 │
 ├── frontend/                   # HTML + CSS + JS ONLY
 │   ├── static/
@@ -293,15 +317,15 @@ my-discord-bot/
 │   │   │   ├── welcome_settings.css   # MASTER CSS for ALL pages
 │   │   │   ├── sidebar.css            # Sidebar navigation (4 breakpoint responsive)
 │   │   │   ├── dashboard.css          # Main dashboard styles
-│   │   │   └── ai_chat.css            # AI Chat styles
+│   │   │   └── ai_chat.css            # AI Chat styles (v4.6 compact)
 │   │   └── js/
 │   │       ├── sidebar.js             # Sidebar behavior
-│   │       ├── ai_chat.js             # AI Chat settings & history (v4.4)
-│   │       ├── welcome.js             # Welcome form v3.7.2 (resizeImage + base64)
+│   │       ├── ai_chat.js             # AI Chat settings & history (v4.6)
+│   │       ├── welcome.js             # Welcome form v3.7.6 (resizeImage + base64)
 │   │       └── dashboard.js           # Dashboard auto-refresh
 │   └── templates/
 │       ├── base.html                  # Base template with sidebar + guild dropdown
-│       ├── welcome_settings.html      # Welcome config v3.7.4 (Dual Style + hidden inputs)
+│       ├── welcome_settings.html      # Welcome config v3.7.6 (Dual Style + hidden inputs)
 │       ├── music_settings.html        # Music player (placeholder)
 │       ├── queue.html                 # Queue manager (placeholder)
 │       ├── playlists.html             # Playlist manager (placeholder)
@@ -312,13 +336,13 @@ my-discord-bot/
 │       ├── templates.html             # Templates (placeholder)
 │       ├── actions.html               # Auto actions (placeholder)
 │       ├── auto_responders.html       # Auto responders (placeholder)
-│       ├── ai_chat.html               # AI Chat settings (v4.4)
+│       ├── ai_chat.html               # AI Chat settings v4.6 (Triple API + Circuit Breaker)
 │       ├── leave_settings.html        # Leave announcement (placeholder)
 │       ├── ban_settings.html          # Ban announcement (placeholder)
 │       └── boost_welcome.html         # Boost welcome (placeholder)
 │
 ├── .gitignore                  # Protect sensitive files
-├── LICENSE
+├── LICENSE                     # All Rights Reserved (Non-Open Source)
 ├── README.md                   # Dokumentasi ini
 └── requirements.txt            # Python dependencies
 ```
@@ -366,19 +390,28 @@ Edit `backend/.env`:
 # WAJIB
 TOKEN_BOT=your_discord_bot_token_here
 
-# AI CHAT — Pilih salah satu atau keduanya
-GEMINI_API_KEY=your_google_ai_studio_api_key        # Primary API
-OPENROUTER_API_KEY=sk-or-v1-your_openrouter_key     # Fallback API
+# AI CHAT — Triple API Fallback (v4.6)
+# Tier 1: Google AI Studio (Primary)
+GEMINI_API_KEY=your_google_ai_studio_api_key
+
+# Tier 2: Groq (Backup — Llama 3.3 70B Versatile)
+GROQ_API_KEY=gsk_your_groq_api_key_here
+
+# Tier 3: OpenRouter (Last Resort)
+OPENROUTER_API_KEY=sk-or-v1-your_openrouter_key_here
 
 # OPSIONAL (untuk Spotify fallback ke Official API)
 SPOTIFY_CLIENT_ID=your_spotify_client_id
 SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 ```
 
-> **Note**: 
-> - `GEMINI_API_KEY` untuk Google AI Studio (native Gemini)
-> - `OPENROUTER_API_KEY` untuk fallback kalau Google quota habis
-> - Bisa pakai salah satu, tapi **disarankan keduanya** untuk redundancy
+> **Note v4.6**:
+>
+> - `GEMINI_API_KEY` untuk Google AI Studio (Tier 1 — Primary)
+> - `GROQ_API_KEY` untuk Groq LPU (Tier 2 — Backup, model: Llama 3.3 70B Versatile)
+> - `OPENROUTER_API_KEY` untuk fallback terakhir (Tier 3 — Last Resort)
+> - **Disarankan semua 3 key** untuk redundancy maksimal
+> - Circuit Breaker akan auto-skip Tier 1 selama 2 jam jika 3x fail berturut-turut
 
 ### 4. Setup Firebase
 
@@ -386,7 +419,7 @@ SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 2. Letakkan di `backend/serviceAccountKey.json`
 3. Pastikan `FIREBASE_KEY=serviceAccountKey.json` di `backend/.env`
 
-> **Note v3.7.3**: Tidak perlu setup Firebase Storage! Bot menggunakan **base64 image** di Firestore (100% free, Spark plan compatible).
+> **Note v3.7.6**: Tidak perlu setup Firebase Storage! Bot menggunakan **base64 image** di Firestore (100% free, Spark plan compatible).
 
 ### 5. Jalankan Bot
 
@@ -404,7 +437,7 @@ Output yang diharapkan:
 [STATUS] Terhubung ke 1 server Discord.
 [COG] ✅ Total 7 cogs loaded!
 [SYNC] ✅ 27 slash command(s) berhasil di-sync!
-[AI CHAT] ✅ Cog loaded. Dual API: Google + OpenRouter
+[AI CHAT] ✅ Cog loaded. Triple API: Google → Groq → OpenRouter
 [AI CHAT] ✅ HTTP session initialized
 [DASHBOARD] 📊 Stats updater aktif (30s).
 ```
@@ -423,7 +456,7 @@ Output yang diharapkan:
 
 ```bash
 git add .
-git commit -m "v4.4.1: Update license and AI model info"
+git commit -m "v4.6: Triple API Fallback + Circuit Breaker"
 git push origin main
 ```
 
@@ -440,8 +473,9 @@ git push origin main
    - **Plan**: Free
 5. Tambah **Environment Variables**:
    - `TOKEN_BOT` = your_discord_token
-   - `GEMINI_API_KEY` = your_google_api_key (opsional tapi direkomendasikan)
-   - `OPENROUTER_API_KEY` = your_openrouter_key (opsional tapi direkomendasikan)
+   - `GEMINI_API_KEY` = your_google_api_key (direkomendasikan)
+   - `GROQ_API_KEY` = your_groq_api_key (direkomendasikan)
+   - `OPENROUTER_API_KEY` = your_openrouter_key (direkomendasikan)
    - `SPOTIFY_CLIENT_ID` = (opsional)
    - `SPOTIFY_CLIENT_SECRET` = (opsional)
 6. Klik **Create Web Service**
@@ -471,9 +505,9 @@ git push origin main
 
 ### 🧠 AI Chat
 
-| Command                        | Deskripsi                           |
-| ------------------------------ | ----------------------------------- |
-| `/ask pertanyaan:<text>`       | Tanya apa saja ke AI                |
+| Command                  | Deskripsi            |
+| ------------------------ | -------------------- |
+| `/ask pertanyaan:<text>` | Tanya apa saja ke AI |
 
 ### 🎵 Music
 
@@ -668,7 +702,7 @@ SpotifyDown API → Spotify Official → oEmbed → HTML Scrape → ytsearch
 }
 ```
 
-### Collection: `guild_settings` (v4.4)
+### Collection: `guild_settings` (v4.6)
 
 ```json
 {
@@ -692,14 +726,14 @@ SpotifyDown API → Spotify Official → oEmbed → HTML Scrape → ytsearch
     "channel_id": "123456789012345678",
     "personality": "friendly",
     "temperature": 0.75,
-    "model": "gemini-flash-2.5"
+    "model": "gemini-2.5-flash"
   }
 }
 ```
 
-> **v4.4 Update**: Tambah `ai_chat_enabled` dan `ai_chat` sub-document untuk konfigurasi AI Chat per server.
+> **v4.6 Update**: AI Chat sekarang menggunakan **Triple API Fallback** dengan **Circuit Breaker**. Konfigurasi dashboard tetap sama (personality, channel, temperature), tapi backend sekarang auto-switch antara Google AI Studio → Groq → OpenRouter.
 
-### Collection: `guild_settings/{guild_id}/ai_chat/{user_id}` (v4.4)
+### Collection: `guild_settings/{guild_id}/ai_chat/{user_id}` (v4.6)
 
 ```json
 {
@@ -741,7 +775,7 @@ SpotifyDown API → Spotify Official → oEmbed → HTML Scrape → ytsearch
 ### Jika Token Terexpose:
 
 1. Segera **reset token** di [Discord Developer Portal](https://discord.com/developers/applications)
-2. **Reset API keys** di [Google AI Studio](https://aistudio.google.com/app/apikey) dan [OpenRouter](https://openrouter.ai/keys)
+2. **Reset API keys** di [Google AI Studio](https://aistudio.google.com/app/apikey), [Groq](https://console.groq.com/keys), dan [OpenRouter](https://openrouter.ai/keys)
 3. Update `.env` / Render env vars dengan token baru
 4. Restart bot
 
@@ -749,9 +783,9 @@ SpotifyDown API → Spotify Official → oEmbed → HTML Scrape → ytsearch
 
 ## 📜 Lisensi
 
-**Hak Cipta © 2024 zeeinz-ux. Semua Hak Dilindungi.**
+**Hak Cipta © 2026 zeeinz-ux. Semua Hak Dilindungi.**
 
-Perangkat lunak ini adalah produk berpemilik dan bukan open-source. Penggunaan, reproduksi, atau distribusi apa pun tanpa izin tertulis dari pemilik hak cipta dilarang keras.
+Perangkat lunak ini adalah produk berpemilik dan **bukan open-source**. Penggunaan, reproduksi, atau distribusi apa pun tanpa izin tertulis dari pemilik hak cipta dilarang keras.
 
 Untuk pertanyaan lisensi atau izin penggunaan, silakan hubungi `zeeeinz` di Discord.
 
@@ -759,33 +793,35 @@ Untuk pertanyaan lisensi atau izin penggunaan, silakan hubungi `zeeeinz` di Disc
 
 ## 🛠️ Troubleshooting
 
-| Error                        | Penyebab                     | Solusi                                                            |
-| ---------------------------- | ---------------------------- | ----------------------------------------------------------------- |
-| `TOKEN_BOT tidak ditemukan`  | `.env` tidak terbaca         | Pastikan `python-dotenv` terinstall, file `backend/.env` ada      |
-| `Module not found: backend`  | sys.path tidak include root  | Pastikan `sys.path.insert(0, _project_root)` di `backend/main.py` |
-| `Module not found: wavelink` | Dependencies belum install   | Jalankan `pip install -r requirements.txt`                        |
-| `Lavalink not connected`     | Node tidak tersedia          | Cek koneksi internet, node mungkin down                           |
-| `Slash command tidak muncul` | Belum di-sync                | Tunggu 1-5 menit, atau restart bot                                |
-| `Permission denied`          | Bot tidak punya izin         | Cek role permission di server Discord                             |
-| `/play hang/stuck`           | Search timeout               | Cek koneksi internet, coba query lain                             |
-| `Dashboard 404`              | Route tidak terdaftar        | Cek `backend/web/web_app.py`, pastikan route ada                  |
-| `Dashboard 500`              | Jinja2 syntax error          | Pastikan `==` (comparison) bukan `=` (assignment) di template     |
-| `CSS tidak load`             | Path static salah            | Cek `static_folder` di Flask app (`../../frontend/static`)        |
-| `TemplateNotFound`           | Template tidak ada           | Pastikan file `.html` ada di `frontend/templates/`                |
-| `Guild dropdown empty`       | `guilds_list` tidak terkirim | Pastikan `main.py` kirim `guilds_list` ke `set_stats()`           |
-| `Sidebar tidak muncul`       | `base.html` tidak di-extend  | Cek `{% extends "base.html" %}` di child templates                |
-| `SpotifyDown API down`       | API tidak tersedia           | Fallback ke oEmbed/HTML scrape otomatis                           |
-| `YouTube 403`                | Lavalink node ke-block       | Ganti node di `backend/utils/constants.py`                        |
-| `spotify_down.py no setup`   | Missing `setup()` function   | Tambahkan `async def setup(bot): pass` di bottom file             |
-| **VS Code formatter error**  | Prettier merusak Jinja2      | Matikan `formatOnSave` untuk HTML di VS Code settings             |
-| `Image upload disappears`    | Base64 terlalu besar         | `welcome.js` sudah resize 1200px, `web_app.py` auto-compress      |
-| `Catbox upload fails`        | Render block outbound        | **Fixed v3.7.3**: Tidak pakai Catbox, pakai base64 Firestore      |
-| `Double welcome message`     | Multiple event listeners     | **Fixed v3.7.3**: `asyncio.Lock` + cooldown 30s                   |
-| `Banner not generating`      | Missing fonts on Linux       | Install `fonts-dejavu` package di server                          |
-| **AI Chat rate limit**       | Google quota = 0             | Tunggu 24-48 jam atau pakai OpenRouter fallback                   |
-| **AI Chat no response**      | AI Chat disabled di dashboard| Cek toggle ON di dashboard → `/dashboard/<guild_id>/ai-chat`    |
-| **AI Chat 10062 error**      | Interaction token expire     | **Fixed v4.4**: defer() dipanggil sebelum cooldown check          |
-| **AI Chat "thinking..."**    | No cog loaded                | Cek log `[AI CHAT] ✅ Cog loaded` saat startup                   |
+| Error                        | Penyebab                      | Solusi                                                                |
+| ---------------------------- | ----------------------------- | --------------------------------------------------------------------- |
+| `TOKEN_BOT tidak ditemukan`  | `.env` tidak terbaca          | Pastikan `python-dotenv` terinstall, file `backend/.env` ada          |
+| `Module not found: backend`  | sys.path tidak include root   | Pastikan `sys.path.insert(0, _project_root)` di `backend/main.py`     |
+| `Module not found: wavelink` | Dependencies belum install    | Jalankan `pip install -r requirements.txt`                            |
+| `Lavalink not connected`     | Node tidak tersedia           | Cek koneksi internet, node mungkin down                               |
+| `Slash command tidak muncul` | Belum di-sync                 | Tunggu 1-5 menit, atau restart bot                                    |
+| `Permission denied`          | Bot tidak punya izin          | Cek role permission di server Discord                                 |
+| `/play hang/stuck`           | Search timeout                | Cek koneksi internet, coba query lain                                 |
+| `Dashboard 404`              | Route tidak terdaftar         | Cek `backend/web/web_app.py`, pastikan route ada                      |
+| `Dashboard 500`              | Jinja2 syntax error           | Pastikan `==` (comparison) bukan `=` (assignment) di template         |
+| `CSS tidak load`             | Path static salah             | Cek `static_folder` di Flask app (`../../frontend/static`)            |
+| `TemplateNotFound`           | Template tidak ada            | Pastikan file `.html` ada di `frontend/templates/`                    |
+| `Guild dropdown empty`       | `guilds_list` tidak terkirim  | Pastikan `main.py` kirim `guilds_list` ke `set_stats()`               |
+| `Sidebar tidak muncul`       | `base.html` tidak di-extend   | Cek `{% extends "base.html" %}` di child templates                    |
+| `SpotifyDown API down`       | API tidak tersedia            | Fallback ke oEmbed/HTML scrape otomatis                               |
+| `YouTube 403`                | Lavalink node ke-block        | Ganti node di `backend/utils/constants.py`                            |
+| `spotify_down.py no setup`   | Missing `setup()` function    | Tambahkan `async def setup(bot): pass` di bottom file                 |
+| **VS Code formatter error**  | Prettier merusak Jinja2       | Matikan `formatOnSave` untuk HTML di VS Code settings                 |
+| `Image upload disappears`    | Base64 terlalu besar          | `welcome.js` sudah resize 1200px, `web_app.py` auto-compress          |
+| `Catbox upload fails`        | Render block outbound         | **Fixed v3.7.6**: Tidak pakai Catbox, pakai base64 Firestore          |
+| `Double welcome message`     | Multiple event listeners      | **Fixed v3.7.6**: `asyncio.Lock` + cooldown 30s                       |
+| `Banner not generating`      | Missing fonts on Linux        | Install `fonts-dejavu` package di server                              |
+| **AI Chat rate limit**       | Google quota = 0              | **Fixed v4.6**: Auto-switch ke Groq (Tier 2) atau OpenRouter (Tier 3) |
+| **AI Chat no response**      | AI Chat disabled di dashboard | Cek toggle ON di dashboard → `/dashboard/<guild_id>/ai-chat`          |
+| **AI Chat 10062 error**      | Interaction token expire      | **Fixed v4.4**: defer() dipanggil sebelum cooldown check              |
+| **AI Chat "thinking..."**    | No cog loaded                 | Cek log `[AI CHAT] ✅ Cog loaded` saat startup                        |
+| **AI Chat circuit open**     | Gemini fail 3x berturut-turut | **Normal v4.6**: Tunggu 2 jam atau cek log untuk detail               |
+| **Groq timeout**             | Groq LPU overload             | **Fixed v4.6**: Auto-switch ke OpenRouter (Tier 3) dalam 10 detik     |
 
 ### ⚠️ VS Code Formatter Warning
 
@@ -817,9 +853,9 @@ VS Code Prettier/formatter otomatis bisa merusak **Jinja2 template syntax** (`{%
 | aiohttp        | >=3.9.0  | Async HTTP untuk API calls (AI Chat + music)         |
 | PyNaCl         | >=1.5.0  | Voice encryption                                     |
 | Pillow         | >=10.0.0 | Image processing (banner generation + auto-compress) |
-| requests       | >=2.31.0 | HTTP requests (legacy, minimal usage)                  |
+| requests       | >=2.31.0 | HTTP requests (legacy, minimal usage)                |
 
-> **Note v4.4**: `google-generativeai` package **dihapus** — sekarang pakai REST API langsung via `aiohttp`.
+> **Note v4.6**: `google-generativeai` package **dihapus** — sekarang pakai REST API langsung via `aiohttp` untuk semua 3 tier (Google, Groq, OpenRouter).
 
 ---
 
@@ -841,7 +877,7 @@ VS Code Prettier/formatter otomatis bisa merusak **Jinja2 template syntax** (`{%
 ```bash
 # Update
 git add .
-git commit -m "v4.4.1: update license and AI model info"
+git commit -m "v4.6: Triple API Fallback + Circuit Breaker"
 git push origin main
 
 # Pull update dari GitHub
@@ -852,23 +888,24 @@ git pull origin main
 
 ## 📝 Changelog
 
-| Versi      | Perubahan                                                                                                                                                                                                                                                                       |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| v1.0       | Initial release — Boost tracking, donasi, Firebase integration                                                                                                                                                                                                                  |
-| v2.0       | **+ Music Player** (YouTube + Spotify via Lavalink)                                                                                                                                                                                                                             |
-| v2.1       | Cogs system — modular architecture                                                                                                                                                                                                                                            |
-| v2.2       | Playlist system (save/load/list/delete via Firebase)                                                                                                                                                                                                                            |
-| v2.3       | Fix skip spam embed, add search timeout, auto-disconnect when alone                                                                                                                                                                                                             |
-| v3.0       | **+ Web Dashboard** — Real-time status, active players, progress bar                                                                                                                                                                                                            |
-| v3.1       | Refactor: extract utils (formatters, constants), separate web folder                                                                                                                                                                                                            |
-| v3.2       | **+ SpotifyDown API** integration with triple fallback                                                                                                                                                                                                                          |
-| v3.3       | Async oEmbed/HTML scrape fallback, fix blocking I/O in `/lyrics`                                                                                                                                                                                                                |
-| v3.4       | Playlist embed + auto-play first track, update Lavalink nodes                                                                                                                                                                                                                   |
-| v3.5       | **+ Welcome Announcement** — Auto welcome message with embed + web dashboard settings                                                                                                                                                                                           |
-| v3.6       | **+ Sidebar Navigation** — Frontend/backend separation, sidebar menu, 15 placeholder pages, AI Chat menu, responsive CSS, welcome v3.6 (rejoin + anti-spam + default bg + drag-drop upload)                                                                                     |
-| v3.7.3     | **+ Dual Style Welcome** (Embed + Banner), **base64 image in Firestore** (100% free, no Catbox/Imgur/Storage), **auto-compress** image >400KB, **asyncio.Lock** anti-double welcome, **Pillow banner generation** with avatar ring, **Style text** above banner |
-| **v4.4.1** | **Update Lisensi**: Mengubah lisensi dari MIT ke Hak Cipta Penuh (All Rights Reserved) untuk menegaskan status non-open-source. Memperbarui info model AI ke Gemini Flash 2.5.                                                                                                    |
-| v4.4       | **+ AI Chat v4.4** — Google Gemini REST API + OpenRouter fallback, dual API auto-switch, personality customization, channel restriction, chat history Firestore, dashboard settings, `/ask` slash command, mention handler, anti-spam cooldown, rate limit handling           |
+| Versi    | Perubahan                                                                                                                                                                                                                                                                                                                                                          |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| v1.0     | Initial release — Boost tracking, donasi, Firebase integration                                                                                                                                                                                                                                                                                                     |
+| v2.0     | **+ Music Player** (YouTube + Spotify via Lavalink)                                                                                                                                                                                                                                                                                                                |
+| v2.1     | Cogs system — modular architecture                                                                                                                                                                                                                                                                                                                                 |
+| v2.2     | Playlist system (save/load/list/delete via Firebase)                                                                                                                                                                                                                                                                                                               |
+| v2.3     | Fix skip spam embed, add search timeout, auto-disconnect when alone                                                                                                                                                                                                                                                                                                |
+| v3.0     | **+ Web Dashboard** — Real-time status, active players, progress bar                                                                                                                                                                                                                                                                                               |
+| v3.1     | Refactor: extract utils (formatters, constants), separate web folder                                                                                                                                                                                                                                                                                               |
+| v3.2     | **+ SpotifyDown API** integration with triple fallback                                                                                                                                                                                                                                                                                                             |
+| v3.3     | Async oEmbed/HTML scrape fallback, fix blocking I/O in `/lyrics`                                                                                                                                                                                                                                                                                                   |
+| v3.4     | Playlist embed + auto-play first track, update Lavalink nodes                                                                                                                                                                                                                                                                                                      |
+| v3.5     | **+ Welcome Announcement** — Auto welcome message with embed + web dashboard settings                                                                                                                                                                                                                                                                              |
+| v3.6     | **+ Sidebar Navigation** — Frontend/backend separation, sidebar menu, 15 placeholder pages, AI Chat menu, responsive CSS, welcome v3.6 (rejoin + anti-spam + default bg + drag-drop upload)                                                                                                                                                                        |
+| v3.7.6   | **+ Dual Style Welcome** (Embed + Banner), **base64 image in Firestore** (100% free, no Catbox/Imgur/Storage), **auto-compress** image >400KB, **asyncio.Lock** anti-double welcome, **Pillow banner generation** with avatar ring, **Style text** above banner                                                                                                    |
+| v4.4.1   | **Update Lisensi**: Mengubah lisensi dari MIT ke Hak Cipta Penuh (All Rights Reserved) untuk menegaskan status non-open-source. Memperbarui info model AI ke Gemini Flash 2.5.                                                                                                                                                                                     |
+| v4.4     | **+ AI Chat v4.4** — Google Gemini REST API + OpenRouter fallback, dual API auto-switch, personality customization, channel restriction, chat history Firestore, dashboard settings, `/ask` slash command, mention handler, anti-spam cooldown, rate limit handling                                                                                                |
+| **v4.6** | **+ AI Chat v4.6** — **Triple API Fallback** (Google AI Studio → Groq → OpenRouter), **Lightweight Circuit Breaker** (auto-skip Tier 1 selama 2 jam setelah 3x fail), **Groq LPU integration** (Llama 3.3 70B Versatile, 10s timeout), **Compact structured logging** (1 baris per tier switch), **Dashboard UI update** (3-tier info cards, engine stack display) |
 
 ---
 
@@ -883,7 +920,9 @@ git pull origin main
 | v4.1  | **Message Builder** — Drag-and-drop embed creator                                    | Planned           |
 | v4.2  | **Auto Responders** — Keyword-based auto replies                                     | Planned           |
 | v4.3  | **Actions** — Trigger-based automation                                               | Planned           |
-| v4.5  | **AI Chat v2** — Multi-model support (GPT, Claude, Llama via OpenRouter)             | Planned           |
+| v4.5  | ~~**AI Chat v2** — Multi-model support~~                                             | ✅ **Done v4.6**  |
+| v4.7  | **AI Chat v4.7** — Streaming response, typing indicator real-time                    | Planned           |
+| v5.0  | **Plugin System** — Third-party cog marketplace                                      | Planned           |
 
 ---
 
@@ -921,6 +960,6 @@ Dashboard page untuk mengontrol music player bot secara real-time.
 
 > **Note**: Bot ini menggunakan `discord.py` v2.7+ dan `wavelink` v3.0+. Pastikan Python versi 3.10+ terinstall.
 >
-> **AI Chat v4.4**: Menggunakan `aiohttp` untuk REST API calls ke Google AI Studio dan OpenRouter. Tidak perlu install `google-generativeai` package.
+> **AI Chat v4.6**: Menggunakan `aiohttp` untuk REST API calls ke Google AI Studio, Groq, dan OpenRouter. Tidak perlu install `google-generativeai` package.
 >
 > **Butuh bantuan?** Buka issue di GitHub atau hubungi developer via Discord.
