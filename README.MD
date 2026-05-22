@@ -13,7 +13,7 @@ Bot Discord all-in-one dengan fitur tracking server boost, pencatatan donasi, mu
 | 📊 **Cek Riwayat Boost**    | Cek status boost user dengan `/cekboost`                                         |
 | 🧪 **Simulasi Boost**       | Testing boost dengan `/testboost` (Admin only)                                   |
 | 🎵 **Music Player**         | Putar lagu dari **YouTube** & **Spotify** dengan kualitas **320kbps**            |
-| 👋 **Welcome Announcement** | Sambut member baru otomatis — **Embed Style** atau **Banner Style (Koya-style)** |
+| 👋 **Welcome Announcement** | Sambut member baru otomatis — **Embed Style** atau **Banner Style** |
 | 📊 **Web Dashboard**        | Status bot real-time + pengaturan per server dengan sidebar navigation           |
 | 🧠 **AI Chat**              | Chat bot AI powered by **Google Gemini API** + **OpenRouter fallback**           |
 | 🔥 **Firebase Firestore**   | Database real-time + **base64 image storage (100% free)**                        |
@@ -108,9 +108,9 @@ Kirim pesan sambutan otomatis saat member baru bergabung ke server. **Dua style 
 
 Kotak embed Discord dengan thumbnail, warna accent, dan background image.
 
-### 🖼️ Style 2: Banner Style (Koya-style)
+### 🖼️ Style 2: Banner Style
 
-Image banner dengan avatar user, text overlay, dan background custom — seperti bot Koya.
+Image banner dengan avatar user, text overlay, dan background custom.
 
 ### Konfigurasi via Web Dashboard
 
@@ -277,7 +277,7 @@ my-discord-bot/
 │   │   ├── general.py          # Ping, stats, help commands
 │   │   ├── boost.py            # Boost Tracker
 │   │   ├── donation.py         # Donation Tracker
-│   │   ├── welcome.py          # Welcome Announcement v3.7.3 (Embed + Banner + Koya text)
+│   │   ├── welcome.py          # Welcome Announcement v3.7.3 
 │   │   └── firebase_setup.py   # Firebase Firestore initialization (FREE tier)
 │   ├── utils/                  # Shared helpers
 │   │   ├── __init__.py
@@ -866,7 +866,7 @@ git pull origin main
 | v3.4       | Playlist embed + auto-play first track, update Lavalink nodes                                                                                                                                                                                                                   |
 | v3.5       | **+ Welcome Announcement** — Auto welcome message with embed + web dashboard settings                                                                                                                                                                                           |
 | v3.6       | **+ Sidebar Navigation** — Frontend/backend separation, sidebar menu, 15 placeholder pages, AI Chat menu, responsive CSS, welcome v3.6 (rejoin + anti-spam + default bg + drag-drop upload)                                                                                     |
-| v3.7.3     | **+ Dual Style Welcome** (Embed + Banner Koya-style), **base64 image in Firestore** (100% free, no Catbox/Imgur/Storage), **auto-compress** image >400KB, **asyncio.Lock** anti-double welcome, **Pillow banner generation** with avatar ring, **Koya-style text** above banner |
+| v3.7.3     | **+ Dual Style Welcome** (Embed + Banner), **base64 image in Firestore** (100% free, no Catbox/Imgur/Storage), **auto-compress** image >400KB, **asyncio.Lock** anti-double welcome, **Pillow banner generation** with avatar ring, **Style text** above banner |
 | **v4.4.1** | **Update Lisensi**: Mengubah lisensi dari MIT ke Hak Cipta Penuh (All Rights Reserved) untuk menegaskan status non-open-source. Memperbarui info model AI ke Gemini Flash 2.5.                                                                                                    |
 | v4.4       | **+ AI Chat v4.4** — Google Gemini REST API + OpenRouter fallback, dual API auto-switch, personality customization, channel restriction, chat history Firestore, dashboard settings, `/ask` slash command, mention handler, anti-spam cooldown, rate limit handling           |
 
