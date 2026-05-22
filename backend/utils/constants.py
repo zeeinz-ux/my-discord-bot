@@ -14,4 +14,19 @@ LAVALINK_NODES = [
         "uri": "http://lavalink-coders.ml:80",
         "password": "Lavalink",
     },
+    # Node 4: v4(SSL)
+    {
+    "host": "lavalinkv4.serenetia.com",
+    "port": 443,
+    "password": "https://seretia.link/discord",
+    "secure": true
+    },
+    # Node 5: V4(NON SSL)
+    {
+    "host": "lavalinkv4.serenetia.com",
+    "port": 443,
+    "password": "https://seretia.link/discord",
+    "secure": true
+    },
+    
 ]
