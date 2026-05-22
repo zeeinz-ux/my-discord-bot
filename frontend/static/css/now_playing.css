@@ -1,370 +1,413 @@
+/* ============================================================
+   Hidden Hamlet v4.6 — Now Playing Page Styles
+   ============================================================ */
+
 :root {
-    --font-family: 'Poppins', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-
-    /* Warna dasar (gelap) */
-    --bg-primary: #121212;
-    --bg-secondary: #1E1E1E;
-    --bg-tertiary: #2a2a2a;
-    --bg-card: #181818;
-    --bg-bar: #333333;
-
-    /* Warna teks */
-    --text-primary: #FFFFFF;
-    --text-secondary: #b3b3b3;
-    --text-muted: #8e8e8e;
-
-    /* Warna aksen */
-    --accent-primary: #1DB954; /* Spotify Green */
-    --accent-secondary: #5865F2; /* Discord Blurple */
-    --accent-red: #ED4245;
-    --accent-green: #3BA55D;
-    --accent-yellow: #FAA61A;
-    --accent-purple: #99a3f5;
-    
-    /* Warna border */
-    --border-color: #333333;
+  /* Core Theme (sync with ai_chat_v46_final.css) */
+  --bg-primary: #0f0f13;
+  --bg-secondary: #1a1a23;
+  --bg-tertiary: #232330;
+  --bg-card: #16161f;
+  --bg-hover: #252535;
+  --border-color: #2a2a3a;
+  --text-primary: #e8e8f0;
+  --text-secondary: #a0a0b8;
+  --text-muted: #6c6c85;
+  --accent-primary: #7c3aed;
+  --accent-secondary: #a78bfa;
+  --accent-glow: rgba(124, 58, 237, 0.25);
+  --success: #10b981;
+  --success-glow: rgba(16, 185, 129, 0.25);
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --danger-glow: rgba(239, 68, 68, 0.25);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
-/* ==========================================================
-   NOW PLAYING PAGE STYLES
-   ========================================================== */
+/* Layout */
+.np-container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
 
-/* --------------------------------------
-   1. Player Container & Layout
-   -------------------------------------- */
-#music-player-container {
-    display: grid;
+@media (max-width: 768px) {
+  .np-container {
     grid-template-columns: 1fr;
-    gap: 2.5rem; /* Jarak antara player dan queue */
-    max-width: 1200px;
-    margin: 1.5rem auto;
+    padding: 12px;
+    gap: 14px;
+  }
 }
 
-/* Layout 2 kolom untuk layar lebih besar */
-@media (min-width: 992px) {
-    #music-player-container {
-        grid-template-columns: 4fr 3fr; /* Player lebih besar dari queue */
-        align-items: flex-start;
-    }
+/* Cards */
+.np-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  transition: var(--transition);
 }
 
-/* --------------------------------------
-   2. Loading State
-   -------------------------------------- */
-.player-loading {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 4rem 2rem;
-    background-color: var(--bg-secondary);
-    border-radius: 12px;
-    text-align: center;
-    height: 100%;
+.np-card:hover {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 20px var(--accent-glow);
 }
 
-.player-loading .spinner {
-    width: 48px;
-    height: 48px;
-    border: 5px solid var(--bg-tertiary);
-    border-bottom-color: var(--accent-primary);
-    border-radius: 50%;
-    display: inline-block;
-    box-sizing: border-box;
-    animation: rotation 1s linear infinite;
+.np-card-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.player-loading p {
-    margin-top: 1.5rem;
-    font-size: 1rem;
-    color: var(--text-secondary);
+/* Now Playing Art */
+.np-art-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16/9;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-tertiary);
+  margin-bottom: 16px;
 }
 
-@keyframes rotation {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+.np-art-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.5s ease;
 }
 
-/* --------------------------------------
-   3. Player Card (Main)
-   -------------------------------------- */
-.player-card {
-    background-color: var(--bg-secondary);
-    border-radius: 16px;
-    padding: 1.5rem;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.1);
-    transition: all 0.3s ease;
+.np-art-wrap:hover img {
+  transform: scale(1.03);
 }
 
-.player-artwork {
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    border-radius: 12px;
-    overflow: hidden;
-    margin-bottom: 1.5rem;
+.np-art-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3rem;
+  color: var(--text-muted);
 }
 
-.player-artwork img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
+/* Track Info */
+.np-track-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.player-info h2 {
-    font-size: 1.75rem;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0 0 0.25rem 0;
-    line-height: 1.2;
+.np-track-artist {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
 }
 
-.player-info p {
-    font-size: 1.1rem;
-    color: var(--text-secondary);
-    margin: 0;
+/* Progress */
+.np-progress-wrap {
+  margin-bottom: 14px;
 }
 
-/* --------------------------------------
-   4. Progress Bar
-   -------------------------------------- */
-.progress-bar-container {
-    margin: 1.5rem 0;
+.np-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  cursor: pointer;
 }
 
-.progress-bar-bg {
-    background-color: var(--bg-tertiary);
-    height: 8px;
-    border-radius: 4px;
-    overflow: hidden;
+.np-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+  border-radius: 3px;
+  width: 0%;
+  transition: width 0.3s linear;
 }
 
-.progress-bar-fg {
-    background-color: var(--accent-primary);
-    height: 100%;
-    width: 0%; /* Diupdate oleh JS */
-    border-radius: 4px;
-    transition: width 0.2s linear;
+.np-time-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 6px;
 }
 
-.progress-bar-time {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.8rem;
-    color: var(--text-secondary);
-    margin-top: 0.5rem;
+/* Controls */
+.np-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 16px;
 }
 
-/* --------------------------------------
-   5. Control Buttons
-   -------------------------------------- */
-.player-controls {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 1rem;
-    margin-top: 1rem;
+.np-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: var(--transition);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
 }
 
-.control-btn {
-    background-color: transparent;
-    border: 2px solid var(--bg-tertiary);
-    color: var(--text-secondary);
-    border-radius: 50%;
-    width: 48px;
-    height: 48px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: all 0.2s ease;
+.np-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-primary);
+  color: var(--accent-secondary);
+  box-shadow: 0 0 12px var(--accent-glow);
 }
 
-.control-btn:hover {
-    background-color: var(--bg-tertiary);
-    color: var(--text-primary);
-    transform: scale(1.05);
+.np-btn:active {
+  transform: scale(0.95);
 }
 
-.control-btn.play-pause {
-    background-color: var(--accent-primary);
-    border-color: var(--accent-primary);
-    color: #fff;
-    width: 64px;
-    height: 64px;
+.np-btn-primary {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #fff;
+  font-size: 1.2rem;
+  padding: 12px 18px;
+  border-radius: 50%;
+  width: 56px;
+  height: 56px;
 }
 
-.control-btn.play-pause:hover {
-    transform: scale(1.1);
-    filter: brightness(1.1);
+.np-btn-primary:hover {
+  background: var(--accent-secondary);
+  box-shadow: 0 0 20px var(--accent-glow);
 }
 
-.control-btn i {
-    font-size: 1.25rem;
+.np-btn-danger {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
-.control-btn.play-pause i {
-    font-size: 1.75rem;
+.np-btn-danger:hover {
+  background: var(--danger);
+  color: #fff;
+  box-shadow: 0 0 12px var(--danger-glow);
 }
 
-
-/* --------------------------------------
-   6. Queue List
-   -------------------------------------- */
-.queue-card {
-    background-color: var(--bg-secondary);
-    border-radius: 16px;
-    padding: 1.5rem;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+/* Volume */
+.np-volume-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.queue-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: 1rem;
+.np-volume-wrap label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  min-width: 48px;
 }
 
-.queue-header h3 {
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
+.np-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
 }
 
-.queue-header .queue-count {
-    font-size: 0.9rem;
-    font-weight: 500;
-    color: var(--text-secondary);
+.np-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  cursor: pointer;
+  border: 2px solid var(--bg-primary);
+  box-shadow: 0 0 8px var(--accent-glow);
+  transition: var(--transition);
 }
 
-.queue-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    max-height: 500px;
-    overflow-y: auto;
+.np-slider::-webkit-slider-thumb:hover {
+  background: var(--accent-secondary);
+  transform: scale(1.15);
 }
 
-.queue-item {
-    display: flex;
-    align-items: center;
-    padding: 0.75rem 0.5rem;
-    border-bottom: 1px solid var(--bg-tertiary);
-    transition: background-color 0.2s ease;
+/* Settings Form */
+.np-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-color);
 }
 
-.queue-item:last-child {
-    border-bottom: none;
+.np-setting-row:last-child {
+  border-bottom: none;
 }
 
-.queue-item:hover {
-    background-color: var(--bg-tertiary);
-    border-radius: 6px;
+.np-setting-label {
+  font-size: 0.85rem;
+  color: var(--text-primary);
 }
 
-.queue-item .pos {
-    font-size: 0.9rem;
-    color: var(--text-secondary);
-    width: 2rem;
-    text-align: center;
+.np-setting-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 2px;
 }
 
-.queue-item-info {
-    flex-grow: 1;
-    overflow: hidden;
-    white-space: nowrap;
+/* Toggle Switch */
+.np-toggle {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  background: var(--bg-tertiary);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: var(--transition);
+  border: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
-.queue-item-info .title {
-    font-weight: 500;
-    color: var(--text-primary);
-    text-overflow: ellipsis;
-    overflow: hidden;
+.np-toggle.active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
 }
 
-.queue-item-info .author {
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-    text-overflow: ellipsis;
-    overflow: hidden;
+.np-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: var(--text-primary);
+  border-radius: 50%;
+  transition: var(--transition);
 }
 
-.queue-item .duration {
-    font-size: 0.9rem;
-    color: var(--text-secondary);
-    padding-left: 1rem;
+.np-toggle.active .np-toggle-knob {
+  left: 22px;
+  background: #fff;
 }
 
-.queue-empty {
-    text-align: center;
-    padding: 2rem 1rem;
-    color: var(--text-secondary);
+/* Select */
+.np-select {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  outline: none;
+  min-width: 180px;
+  transition: var(--transition);
 }
 
-.queue-empty i {
-    font-size: 2rem;
-    margin-bottom: 0.5rem;
+.np-select:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 8px var(--accent-glow);
 }
 
-/* --------------------------------------
-   7. Responsive Design
-   -------------------------------------- */
-@media (max-width: 991px) {
-    .queue-card {
-        margin-top: 2rem;
-    }
+/* Status Badge */
+.np-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 16px;
 }
 
-@media (max-width: 767px) {
-    .player-card, .queue-card {
-        padding: 1.25rem;
-        border-radius: 12px;
-    }
-
-    .player-info h2 {
-        font-size: 1.5rem;
-    }
-
-    .player-info p {
-        font-size: 1rem;
-    }
-
-    .control-btn {
-        width: 44px;
-        height: 44px;
-    }
-    .control-btn.play-pause {
-        width: 60px;
-        height: 60px;
-    }
-    .control-btn i { font-size: 1.1rem; }
-    .control-btn.play-pause i { font-size: 1.5rem; }
+.np-status-playing {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
-@media (max-width: 480px) {
-    .page-wrap {
-        /* Menggunakan padding dari CSS global yang ada di welcome_settings.css */
-        /* Ini memastikan konsistensi */
-    }
-    
-    .player-card, .queue-card {
-        padding: 1rem;
-    }
+.np-status-idle {
+  background: rgba(108, 108, 133, 0.15);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+}
 
-    .player-info h2 {
-        font-size: 1.3rem;
-    }
+.np-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 2s infinite;
+}
 
-    .player-info p {
-        font-size: 0.95rem;
-    }
-    
-    .control-btn {
-        width: 40px;
-        height: 40px;
-    }
-    .control-btn.play-pause {
-        width: 56px;
-        height: 56px;
-    }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Quick Actions Bar */
+.np-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.np-actions .np-btn {
+  font-size: 0.8rem;
+  padding: 8px 14px;
+  gap: 6px;
+}
+
+/* Toast */
+.np-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px 18px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  box-shadow: var(--shadow-md);
+  display: none;
+  z-index: 1000;
+  transition: var(--transition);
+}
+
+.np-toast.show {
+  display: block;
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
