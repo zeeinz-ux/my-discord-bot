@@ -7,6 +7,15 @@
 {% endblock %}
 
 {% block content %}
+<!-- Breadcrumb -->
+<nav class="breadcrumb">
+  <a href="/dashboard/{{ guild_id }}/">Dashboard</a>
+  <span class="breadcrumb-separator">›</span>
+  <span>MUSIC</span>
+  <span class="breadcrumb-separator">›</span>
+  <span class="breadcrumb-current">Now Playing</span>
+</nav>
+
 <div class="np-container">
   <!-- Status Badge -->
   <div style="grid-column: 1 / -1;">
