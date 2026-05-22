@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import os
 import aiohttp
 import json
@@ -112,6 +113,7 @@ class AIChat(commands.Cog):
 
     async def _call_openrouter_api(self, messages: List[Dict[str, str]], temperature: float) -> Optional[str]:
         if not self.openrouter_api_key:
+            print("[AI_CHAT_ERROR] Fallback ke OpenRouter gagal: OPENROUTER_API_KEY tidak diatur.")
             return None
             
         openrouter_messages = []
@@ -214,18 +216,10 @@ class AIChat(commands.Cog):
                  await message.reply("Ada apa panggil-panggil? Kalau mau ngobrol, mention aku sambil kasih pertanyaan ya. Contoh: `@Hidden Hamlet ceritain dong soal server ini`")
                  return
             
-            # This is a simplified mock interaction. For slash commands, it's handled directly.
-            # We will use the message itself for context and replying.
-            
-            # Start typing indicator
             async with message.channel.typing():
-                # We need a way to handle the full logic including cooldown and settings.
-                # Re-creating a full interaction object is complex. Let's simplify.
-                
                 guild_id = message.guild.id
                 user_id = message.author.id
                 
-                # Cooldown Check
                 now = time.time()
                 cooldown_key = (guild_id, user_id)
                 if cooldown_key in self._cooldowns and (now - self._cooldowns[cooldown_key]) < COOLDOWN_SECONDS:
@@ -234,17 +228,14 @@ class AIChat(commands.Cog):
                     return
                 self._cooldowns[cooldown_key] = now
 
-                # Settings Check (simplified for on_message)
                 settings = await self._get_db_settings(guild_id)
                 if not settings.get('ai_chat_enabled', False):
-                    return # Don't reply if AI is disabled
+                    return
 
                 allowed_channel = settings.get('ai_chat', {}).get('channel_id')
                 if allowed_channel and str(message.channel.id) != allowed_channel:
-                    return # Don't reply in wrong channel
+                    return
 
-                # We can't use the full _handle_chat_request without a proper interaction object.
-                # So we'll duplicate a small part of the logic here for mentions.
                 temperature = settings.get('ai_chat', {}).get('temperature', 0.75)
                 history = await self._get_user_history(guild_id, user_id)
                 
@@ -271,13 +262,11 @@ class AIChat(commands.Cog):
                     final_message = f"{response_text}\n*— Ditenagai oleh {api_used}*"
                     await message.reply(final_message)
                 else:
-                    # Don't send error on mention to avoid being too noisy
                     print("[AI CHAT] Both APIs failed for a mention request. Supressing error message.")
 
-
-    @commands.slash_command(name="ask", description="Tanya apa saja ke AI")
+    @app_commands.command(name="ask", description="Tanya apa saja ke AI")
+    @app_commands.describe(pertanyaan="Pertanyaan yang ingin kamu ajukan ke AI")
     async def ask(self, interaction: discord.Interaction, pertanyaan: str):
-        # The mock interaction part is no longer needed here.
         await self._handle_chat_request(interaction, pertanyaan)
 
 
