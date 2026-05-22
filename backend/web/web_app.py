@@ -151,6 +151,49 @@ def pop_music_commands(max_n: int = 20) -> list:
         return cmds
 
 # ==========================================================
+# [FIX v4.6.1] Music Settings Cache (thread-safe)
+# ==========================================================
+_music_settings_lock = threading.Lock()
+_music_settings_cache: dict = {}  # {guild_id: settings_dict}
+
+def _get_music_settings(guild_id: str) -> dict:
+    """Get music settings dari cache atau Firestore."""
+    with _music_settings_lock:
+        if guild_id in _music_settings_cache:
+            return _music_settings_cache[guild_id]
+
+    # Fallback: coba baca dari Firestore
+    if db is not None:
+        try:
+            doc = db.collection("guild_settings").document(guild_id).get()
+            if doc.exists:
+                data = doc.to_dict()
+                settings = data.get("music_settings", {})
+                with _music_settings_lock:
+                    _music_settings_cache[guild_id] = settings
+                return settings
+        except Exception as e:
+            print(f"[MUSIC SETTINGS] ❌ Error reading from Firestore: {e}")
+
+    return {}
+
+def _set_music_settings(guild_id: str, settings: dict):
+    """Save music settings ke cache dan Firestore."""
+    with _music_settings_lock:
+        _music_settings_cache[guild_id] = settings
+
+    if db is not None:
+        try:
+            db.collection("guild_settings").document(guild_id).set({
+                "music_settings": settings
+            }, merge=True)
+            return True
+        except Exception as e:
+            print(f"[MUSIC SETTINGS] ❌ Error saving to Firestore: {e}")
+            return False
+    return True
+
+# ==========================================================
 # Helper — baca config welcome dari Firestore
 # ==========================================================
 def _get_welcome_config(guild_id: str) -> dict:
@@ -295,11 +338,13 @@ def music_redirect(guild_id: str):
 @app.route("/dashboard/<guild_id>/music/now-playing")
 def music_now_playing(guild_id: str):
     channels = get_music_voice_channels(guild_id)
+    settings = _get_music_settings(guild_id)
     return _render_page(
         "now_playing.html",
         active_page="now_playing",
         guild_id=guild_id,
         channels=channels,
+        music_settings=settings,
     )
 
 @app.route("/dashboard/<guild_id>/music/queue")
@@ -560,6 +605,61 @@ def api_ai_chat_history(guild_id):
         results = results[:50]
 
         return jsonify({"success": True, "history": results}), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+# ==========================================================
+# [FIX v4.6.1] ROUTES — Music Settings API (Save/Load)
+# ==========================================================
+
+@app.route("/api/music/settings/<guild_id>")
+def api_music_settings(guild_id):
+    """Get music settings untuk guild."""
+    try:
+        settings = _get_music_settings(guild_id)
+        return jsonify({
+            "success": True,
+            "settings": settings
+        }), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route("/api/music/settings/<guild_id>/save", methods=["POST"])
+def api_music_settings_save(guild_id):
+    """Save music settings untuk guild."""
+    try:
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
+
+        # Validasi dan sanitize input
+        settings = {
+            "autojoin": data.get("autojoin", False) in (True, "true", "True", "1"),
+            "mode_247": data.get("mode_247", False) in (True, "true", "True", "1"),
+            "announce": data.get("announce", True) in (True, "true", "True", "1"),
+            "default_volume": max(0, min(100, int(data.get("default_volume", 50)))),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        success = _set_music_settings(guild_id, settings)
+
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Music settings saved.",
+                "settings": settings
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Failed to save settings."
+            }), 500
 
     except Exception as e:
         traceback.print_exc()
