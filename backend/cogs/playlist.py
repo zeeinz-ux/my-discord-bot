@@ -17,9 +17,11 @@ from discord import app_commands
 import wavelink
 import asyncio
 import os
+import sys
 from datetime import datetime, timezone
 
 from backend.utils.formatters import format_duration
+
 
 def get_db():
     try:
@@ -28,6 +30,19 @@ def get_db():
     except Exception as e:
         print(f"[PLAYLIST_COG] ⚠️ Firebase import failed: {e}")
         return None
+
+
+def _get_web_app():
+    """Ambil web_app module via sys.modules (avoid circular import)."""
+    wa = sys.modules.get("backend.web.web_app")
+    if wa is None:
+        try:
+            import backend.web.web_app as wa_mod
+            wa = wa_mod
+        except Exception as e:
+            print(f"[PLAYLIST_COG] ⚠️ Cannot import web_app: {e}")
+            return None
+    return wa
 
 
 class PlaylistManager(commands.Cog):
@@ -41,6 +56,59 @@ class PlaylistManager(commands.Cog):
         self._music_cog = self.bot.get_cog("Music")
         if self._music_cog:
             print("[PLAYLIST_COG] ✅ Linked with Music Cog.")
+
+    # ==========================================================
+    # TASK: Command Consumer untuk playlist load dari dashboard
+    # ==========================================================
+    @tasks.loop(seconds=2)
+    async def command_consumer(self):
+        wa = _get_web_app()
+        if not wa:
+            return
+        try:
+            cmds = wa.pop_music_commands(max_n=10)
+        except Exception as e:
+            print(f"[PLAYLIST_COG] Pop commands error: {e}")
+            return
+
+        for cmd in cmds:
+            scope = cmd.get("scope")
+            if scope == "playlist":
+                try:
+                    await self._execute_playlist_cmd(cmd)
+                except Exception as e:
+                    print(f"[PLAYLIST_COG] ❌ Playlist cmd error: {e}")
+
+    @command_consumer.before_loop
+    async def before_consumer(self):
+        await self.bot.wait_until_ready()
+
+    async def _execute_playlist_cmd(self, cmd: dict):
+        payload = cmd.get("payload", {})
+        guild_id = int(payload.get("guild_id", 0))
+        action = payload.get("action")
+        guild = self.bot.get_guild(guild_id)
+        if not guild:
+            return
+        player: wavelink.Player = guild.voice_client
+        if not player:
+            return
+
+        if action == "load_playlist":
+            tracks = payload.get("tracks", [])
+            if player and tracks:
+                for t in tracks:
+                    query = t.get("url") or t.get("query") or f"ytsearch:{t.get('title', '')}"
+                    try:
+                        results = await wavelink.Playable.search(query)
+                        if results:
+                            await player.queue.put_wait(results[0])
+                    except Exception as e:
+                        print(f"[PLAYLIST_COG] Playlist load error: {e}")
+                if not player.current and not player.queue.is_empty:
+                    await player.set_volume(100)
+                    await asyncio.sleep(0.3)
+                    await player.play(player.queue.get())
 
     # ==========================================================
     # SLASH COMMANDS
@@ -176,6 +244,18 @@ class PlaylistManager(commands.Cog):
             return
         doc_ref.delete()
         await interaction.response.send_message(f"🗑️ Playlist **{name}** dihapus.")
+
+    # ==========================================================
+    # EVENTS
+    # ==========================================================
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if not self.command_consumer.is_running():
+            self.command_consumer.start()
+            print("[PLAYLIST_COG] ✅ Command consumer started (2s).")
+
+    async def cog_unload(self):
+        self.command_consumer.cancel()
 
 
 async def setup(bot: commands.Bot):
