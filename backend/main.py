@@ -10,6 +10,7 @@ if _project_root not in sys.path:
 
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 import time
 import threading
 from dotenv import load_dotenv
@@ -18,47 +19,26 @@ import asyncio
 
 load_dotenv()
 
-# ==========================================================
-# KUMPULKAN SEMUA IMPOR PENTING DI ATAS
-# ==========================================================
-from backend.cogs.firebase_setup import initialize_firestore
-from backend.web.web_app import app, set_stats, set_guild_channels, set_bot_instance, set_db_instance
+# ===== INIT FIREBASE SEBELUM LOAD COGS =====
+from backend.cogs import firebase_setup
+# ============================================
+
+# ===== [DASHBOARD] Import Flask app dari web/ =====
+from backend.web.web_app import app, set_stats, set_guild_channels
+# ==================================================
+
+# ===== [UTILS] Shared constants =====
 from backend.utils.constants import LAVALINK_NODES
+# =====================================
 
-# ==========================================================
-# INISIALISASI DATABASE & PEMBERIAN INSTANCE
-# ==========================================================
-# 1. Buat koneksi database SATU KALI
-db = initialize_firestore()
-
-# 2. Berikan instance DB ke web app
-if db:
-    set_db_instance(db)
-    print("[MAIN] ✅ Instance Firestore berhasil diberikan ke Web App.")
-else:
-    print("[MAIN] ⚠️ Koneksi Firestore gagal, beberapa fitur web mungkin tidak berfungsi.")
-
-# ==========================================================
-# SETUP BOT DISCORD
-# ==========================================================
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-# 3. Berikan instance DB ke bot
-bot.db = db
-
 start_time = time.time()
 
-# Berikan instance bot ke web app
-set_bot_instance(bot)
-
-# ==========================================================
-# FLASK (WEB DASHBOARD) THREAD
-# ==========================================================
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
@@ -66,89 +46,65 @@ def run_flask():
 flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
-# ==========================================================
-# BOT SETUP HOOK (Async Initialization)
-# ==========================================================
+# ===== LAVALINK: PUBLIC NODE =====
 @bot.event
 async def setup_hook():
-    # --- LAVALINK NODES ---
     nodes = [
         wavelink.Node(uri=node["uri"], password=node["password"])
         for node in LAVALINK_NODES
     ]
-    await wavelink.Pool.connect(nodes=nodes, client=bot, cache_capacity=100)
 
-    # --- LOAD COGS ---
-    cogs_dir = os.path.join(_project_root, "backend", "cogs")
-    cog_count = 0
-    exclude_files = ("__init__.py", "firebase_setup.py", "spotify_down.py")
+    for i, node in enumerate(nodes, 1):
+        try:
+            await asyncio.wait_for(
+                wavelink.Pool.connect(nodes=[node], client=bot),
+                timeout=15.0
+            )
+            print(f"[LAVALINK] ✅ Node {i} tersambung: {node.uri}")
+            return
+        except asyncio.TimeoutError:
+            print(f"[LAVALINK] ⏱️ Node {i} timeout: {node.uri}")
+        except Exception as e:
+            print(f"[LAVALINK] ❌ Node {i} gagal: {str(e)[:80]}")
 
-    print("\n" + "=" * 50)
-    for filename in os.listdir(cogs_dir):
-        if filename.endswith(".py") and filename not in exclude_files:
-            cog_name = filename[:-3]
-            try:
-                await bot.load_extension(f"backend.cogs.{cog_name}")
-                print(f"[COG] 📦 Loaded: {filename}")
-                cog_count += 1
-            except Exception as e:
-                print(f"[COG] ❌ Failed to load {filename}: {e}")
-    print(f"[COG] ✅ Total {cog_count} cogs loaded!")
-    print("=" * 50)
+    print("[LAVALINK] ⚠️ Lavalink tidak tersedia. Fitur musik mati.")
 
-# ==========================================================
-# BOT EVENTS (on_ready, etc.)
-# ==========================================================
-@bot.event
-async def on_ready():
-    print(f"[STATUS] 🤖 {bot.user.name} SEKARANG SUDAH ONLINE!")
-    print(f"[STATUS] Terhubung ke {len(bot.guilds)} server Discord.")
-
-    try:
-        synced = await bot.tree.sync()
-        print(f"[SYNC] ✅ {len(synced)} slash command(s) berhasil di-sync!")
-    except Exception as e:
-        print(f"[SYNC] ❌ Gagal sync commands: {e}")
-
-    # Jalankan background tasks setelah semua siap
-    if not lavalink_healthcheck.is_running():
-        lavalink_healthcheck.start()
-        print("[TASKS] 🔄 Lavalink health check loop aktif (60s).")
-
-    if not update_stats.is_running():
-        update_stats.start()
-        print("[TASKS] 📊 Dashboard stats updater aktif (30s).")
-
-    print("=" * 50)
-
-# ==========================================================
-# BACKGROUND TASKS (Loops)
-# ==========================================================
+# [POLISH] Lavalink auto-reconnect loop
 @tasks.loop(seconds=60)
 async def lavalink_healthcheck():
-    # Simplified check from your original code
     if not wavelink.Pool.nodes:
         print("[LAVALINK] ⚠️ Node tidak terdeteksi, mencoba reconnect...")
-        # Add reconnect logic if needed, for now, it just reports.
+        node_cfg = LAVALINK_NODES[0]
+        node = wavelink.Node(uri=node_cfg["uri"], password=node_cfg["password"])
+        try:
+            await wavelink.Pool.connect(nodes=[node], client=bot)
+            print("[LAVALINK] ✅ Reconnect berhasil!")
+        except Exception as e:
+            print(f"[LAVALINK] ❌ Reconnect gagal: {e}")
 
 @lavalink_healthcheck.before_loop
 async def before_healthcheck():
     await bot.wait_until_ready()
 
+# ===== [DASHBOARD] Stats updater loop =====
 @tasks.loop(seconds=30)
 async def update_stats():
     try:
-        # This entire block is from your original code
         nodes = wavelink.Pool.nodes
-        lavalink_ok = bool(nodes)
-        node_uri = list(nodes.values())[0].uri if nodes else "N/A"
+        lavalink_ok = len(nodes) > 0
+        node_uri = "N/A"
+        if nodes:
+            first = list(nodes.values())[0]
+            node_uri = getattr(first, "uri", "Unknown")
 
         players = []
         for guild in bot.guilds:
             vc = guild.voice_client
             if vc and getattr(vc, "current", None):
                 ch = getattr(vc, "channel", None)
-                listeners = len([m for m in ch.members if not m.bot]) if ch else 0
+                listeners = 0
+                if ch:
+                    listeners = len([m for m in ch.members if not m.bot])
                 players.append({
                     "guild": guild.name,
                     "track": vc.current.title,
@@ -161,6 +117,7 @@ async def update_stats():
                     "artwork": vc.current.artwork or ""
                 })
 
+        # Sync guild channels untuk dropdown
         for guild in bot.guilds:
             text_channels = [
                 {"id": str(ch.id), "name": ch.name}
@@ -169,6 +126,7 @@ async def update_stats():
             ]
             set_guild_channels(str(guild.id), text_channels)
 
+        # Guilds list untuk sidebar
         guilds_list = [
             {"id": str(g.id), "name": g.name, "member_count": g.member_count or 0}
             for g in bot.guilds
@@ -193,9 +151,52 @@ async def update_stats():
 async def before_update_stats():
     await bot.wait_until_ready()
 
-# ==========================================================
-# RUN THE BOT
-# ==========================================================
+@bot.event
+async def on_ready():
+    print("=" * 50)
+    print(f"[STATUS] 🤖 {bot.user.name} SEKARANG SUDAH ONLINE!")
+    print(f"[STATUS] Terhubung ke {len(bot.guilds)} server Discord.")
+    print("=" * 50)
+
+    # ===== FIX: Load cogs dari path absolut =====
+    # [v4.1 UPDATE] Exclude spotify_down.py (utility, bukan cog)
+    cogs_dir = os.path.join(_project_root, "backend", "cogs")
+    cog_count = 0
+    exclude_files = ("__init__.py", "firebase_setup.py", "spotify_down.py")
+
+    for filename in os.listdir(cogs_dir):
+        if filename.endswith(".py") and filename not in exclude_files:
+            cog_name = filename[:-3]
+            try:
+                await bot.load_extension(f"backend.cogs.{cog_name}")
+                print(f"[COG] 📦 Loaded: {filename}")
+                cog_count += 1
+            except Exception as e:
+                print(f"[COG] ❌ Failed to load {filename}: {e}")
+
+    print(f"[COG] ✅ Total {cog_count} cogs loaded!")
+
+    if not wavelink.Pool.nodes:
+        print("[STATUS] 🎵 Music: Lavalink TIDAK terhubung.")
+
+    try:
+        synced = await bot.tree.sync()
+        print(f"[SYNC] ✅ {len(synced)} slash command(s) berhasil di-sync!")
+        for cmd in synced:
+            print(f"  - /{cmd.name}")
+    except Exception as e:
+        print(f"[SYNC] ❌ Gagal sync commands: {e}")
+
+    if not lavalink_healthcheck.is_running():
+        lavalink_healthcheck.start()
+        print("[LAVALINK] 🔄 Health check loop aktif (60s).")
+
+    if not update_stats.is_running():
+        update_stats.start()
+        print("[DASHBOARD] 📊 Stats updater aktif (30s).")
+
+    print("=" * 50)
+
 TOKEN = os.getenv("TOKEN_BOT")
 if not TOKEN:
     print("[ERROR] TOKEN_BOT tidak ditemukan di .env!")
