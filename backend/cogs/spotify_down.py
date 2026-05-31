@@ -1,11 +1,11 @@
 """
-SpotifyDown API Integration - Async Resolver dengan Multi-Fallback
-===================================================================
+Spotify resolver with resilient multi-fallback support.
+
 Fallback chain:
-    1. SpotifyDown API (async, no auth)
-    2. Spotify Official API (async, Client Credentials)
-    3. Spotify oEmbed (async, no auth)
-    4. Spotify HTML scrape (async, no auth)
+    1. Spotify Official API (Client Credentials)
+    2. SpotifyDown API (unofficial)
+    3. Spotify public page scrape -> track IDs -> track oEmbed
+    4. Spotify oEmbed / page metadata fallback
 """
 
 import asyncio
@@ -13,7 +13,8 @@ import base64
 import logging
 import re
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import aiohttp
 
@@ -21,11 +22,12 @@ logger = logging.getLogger(__name__)
 
 SPOTIFYDOWN_BASE = "https://api.spotifydown.com"
 SPOTIFY_URL_PATTERNS = [
-    r"open\.spotify\.com/(?P<type>track|playlist|album)/(?P<id>[a-zA-Z0-9]+)",
-    r"spotify:(?P<type>track|playlist|album):(?P<id>[a-zA-Z0-9]+)",
+    r"(?:https?://)?(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?)?(?P<type>track|playlist|album)/(?P<id>[A-Za-z0-9]+)",
+    r"spotify:(?P<type>track|playlist|album):(?P<id>[A-Za-z0-9]+)",
 ]
 REQUEST_TIMEOUT = 15
 MAX_RETRIES = 2
+CONCURRENT_FETCH_LIMIT = 5
 
 
 @dataclass
@@ -42,7 +44,7 @@ class ResolvedTrack:
 
 
 # ==========================================================
-# SPOTIFYDOWN CLIENT (Primary)
+# SPOTIFYDOWN CLIENT (Unofficial)
 # ==========================================================
 class SpotifyDownClient:
     def __init__(self, session: aiohttp.ClientSession):
@@ -63,16 +65,22 @@ class SpotifyDownClient:
         for attempt in range(MAX_RETRIES):
             try:
                 async with self.session.request(
-                    method, url, headers=self.headers,
-                    timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT), **kwargs,
+                    method,
+                    url,
+                    headers=self.headers,
+                    timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+                    **kwargs,
                 ) as resp:
                     if resp.status == 200:
                         return await resp.json()
-                    elif resp.status in (429, 502, 503):
+
+                    if resp.status in (429, 502, 503):
                         await asyncio.sleep(2 ** attempt)
-                    else:
-                        logger.error("SpotifyDown error %s pada %s", resp.status, endpoint)
-                        return None
+                        continue
+
+                    body = await resp.text()
+                    logger.error("SpotifyDown error %s pada %s | body=%s", resp.status, endpoint, body[:200])
+                    return None
             except asyncio.TimeoutError:
                 if attempt < MAX_RETRIES - 1:
                     await asyncio.sleep(2 ** attempt)
@@ -84,37 +92,45 @@ class SpotifyDownClient:
     async def get_playlist_tracks(self, playlist_id: str) -> List[Dict]:
         tracks: List[Dict] = []
         offset = 0
+
         while True:
             params = {"offset": offset} if offset else {}
             data = await self._request("GET", f"/trackList/playlist/{playlist_id}", params=params)
             if not data or "trackList" not in data:
                 break
-            batch = data["trackList"]
+
+            batch = data.get("trackList") or []
             if not batch:
                 break
+
             tracks.extend(batch)
             next_offset = data.get("nextOffset")
             if next_offset is None or next_offset == offset:
                 break
             offset = next_offset
+
         return tracks
 
     async def get_album_tracks(self, album_id: str) -> List[Dict]:
         tracks: List[Dict] = []
         offset = 0
+
         while True:
             params = {"offset": offset} if offset else {}
             data = await self._request("GET", f"/trackList/album/{album_id}", params=params)
             if not data or "trackList" not in data:
                 break
-            batch = data["trackList"]
+
+            batch = data.get("trackList") or []
             if not batch:
                 break
+
             tracks.extend(batch)
             next_offset = data.get("nextOffset")
             if next_offset is None or next_offset == offset:
                 break
             offset = next_offset
+
         return tracks
 
     async def get_youtube_id(self, spotify_track_id: str) -> Optional[str]:
@@ -125,7 +141,7 @@ class SpotifyDownClient:
 
 
 # ==========================================================
-# SPOTIFY OFFICIAL API (Fallback 1)
+# SPOTIFY OFFICIAL API (Fallback)
 # ==========================================================
 class SpotifyOfficialClient:
     def __init__(self, client_id: str, client_secret: str):
@@ -135,15 +151,12 @@ class SpotifyOfficialClient:
         self._token_expires = 0.0
 
     async def _get_token(self, session: aiohttp.ClientSession) -> Optional[str]:
-        if self._token and asyncio.get_event_loop().time() < self._token_expires:
-            logger.info("[SPOTIFY AUTH] Reusing cached token.")
+        loop = asyncio.get_running_loop()
+        if self._token and loop.time() < self._token_expires:
             return self._token
 
-        logger.info("[SPOTIFY AUTH] Requesting new token from accounts.spotify.com...")
         try:
-            creds = base64.b64encode(
-                f"{self.client_id}:{self.client_secret}".encode()
-            ).decode()
+            creds = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode()
             async with session.post(
                 "https://accounts.spotify.com/api/token",
                 headers={
@@ -153,34 +166,25 @@ class SpotifyOfficialClient:
                 data={"grant_type": "client_credentials"},
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    self._token = data["access_token"]
-                    self._token_expires = (
-                        asyncio.get_event_loop().time() + data["expires_in"] - 60
-                    )
-                    logger.info("[SPOTIFY AUTH] Token berhasil didapat!")
-                    return self._token
-                else:
+                if resp.status != 200:
                     body = await resp.text()
-                    logger.error(
-                        "[SPOTIFY AUTH] GAGAL - HTTP %s | body: %s",
-                        resp.status, body[:300]
-                    )
+                    logger.error("[SPOTIFY AUTH] Token request failed HTTP %s | body=%s", resp.status, body[:250])
+                    return None
+
+                data = await resp.json()
+                self._token = data["access_token"]
+                self._token_expires = loop.time() + int(data.get("expires_in", 3600)) - 60
+                return self._token
         except Exception as e:
             logger.error("[SPOTIFY AUTH] Exception: %s", e)
-        return None
+            return None
 
-    async def get_playlist_tracks(
-        self, session: aiohttp.ClientSession, playlist_id: str
-    ) -> List[Dict]:
-        logger.info("[SPOTIFY AUTH] get_playlist_tracks dipanggil untuk: %s", playlist_id)
+    async def get_playlist_tracks(self, session: aiohttp.ClientSession, playlist_id: str) -> List[Dict]:
         token = await self._get_token(session)
         if not token:
-            logger.error("[SPOTIFY AUTH] Tidak bisa dapat token, abort.")
             return []
 
-        tracks = []
+        tracks: List[Dict] = []
         url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
         params = {"limit": 100, "offset": 0}
 
@@ -193,40 +197,37 @@ class SpotifyOfficialClient:
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status == 401:
-                        logger.warning("[SPOTIFY AUTH] Token expired, refresh...")
                         self._token = None
                         token = await self._get_token(session)
                         if not token:
                             break
                         continue
+
                     if resp.status != 200:
                         body = await resp.text()
-                        logger.error("[SPOTIFY AUTH] get_playlist_tracks HTTP %s: %s", resp.status, body[:200])
+                        logger.error("[SPOTIFY AUTH] playlist tracks HTTP %s | body=%s", resp.status, body[:300])
                         break
+
                     data = await resp.json()
-                    items = data.get("items", [])
-                    for item in items:
+                    for item in data.get("items", []):
                         track = item.get("track")
                         if track and track.get("id"):
                             tracks.append(track)
-                    next_url = data.get("next")
-                    url = next_url
-                    params = {}  # next URL sudah include params
+
+                    url = data.get("next")
+                    params = {}
             except Exception as e:
                 logger.error("[SPOTIFY AUTH] Exception saat fetch tracks: %s", e)
                 break
 
-        logger.info("[SPOTIFY AUTH] Total tracks fetched: %d", len(tracks))
         return tracks
 
-    async def get_album_tracks(
-        self, session: aiohttp.ClientSession, album_id: str
-    ) -> List[Dict]:
+    async def get_album_tracks(self, session: aiohttp.ClientSession, album_id: str) -> List[Dict]:
         token = await self._get_token(session)
         if not token:
             return []
 
-        tracks = []
+        tracks: List[Dict] = []
         url = f"https://api.spotify.com/v1/albums/{album_id}/tracks"
         params = {"limit": 50, "offset": 0}
 
@@ -238,8 +239,16 @@ class SpotifyOfficialClient:
                     params=params,
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
+                    if resp.status == 401:
+                        self._token = None
+                        token = await self._get_token(session)
+                        if not token:
+                            break
+                        continue
+
                     if resp.status != 200:
                         break
+
                     data = await resp.json()
                     tracks.extend(data.get("items", []))
                     url = data.get("next")
@@ -247,14 +256,16 @@ class SpotifyOfficialClient:
             except Exception as e:
                 logger.error("[SPOTIFY AUTH] Exception saat fetch album tracks: %s", e)
                 break
+
         return tracks
 
 
 # ==========================================================
-# HELPER FUNCTIONS (oEmbed & HTML scrape)
+# HELPERS
 # ==========================================================
 async def _get_spotify_metadata_oembed(
-    session: aiohttp.ClientSession, url: str
+    session: aiohttp.ClientSession,
+    url: str,
 ) -> Optional[Dict]:
     try:
         async with session.get(
@@ -266,7 +277,7 @@ async def _get_spotify_metadata_oembed(
                 data = await resp.json()
                 return {
                     "name": data.get("title", ""),
-                    "artists": data.get("provider_name", "Spotify"),
+                    "artists": data.get("author_name") or data.get("provider_name", "Spotify"),
                     "artwork": data.get("thumbnail_url"),
                 }
     except Exception as e:
@@ -275,7 +286,8 @@ async def _get_spotify_metadata_oembed(
 
 
 async def _get_spotify_metadata_html(
-    session: aiohttp.ClientSession, url: str
+    session: aiohttp.ClientSession,
+    url: str,
 ) -> Optional[Dict]:
     try:
         async with session.get(
@@ -285,15 +297,60 @@ async def _get_spotify_metadata_html(
         ) as resp:
             if resp.status == 200:
                 html = await resp.text()
-                title_match = re.search(r"<title>([^<]+)</title>", html)
+                title_match = re.search(r"<title>([^<]+)</title>", html, flags=re.IGNORECASE)
                 if title_match:
-                    return {
-                        "name": title_match.group(1).replace(" | Spotify", "").strip(),
-                        "artists": "Unknown",
-                        "artwork": None,
-                    }
+                    title = title_match.group(1).replace(" | Spotify", "").strip()
+                    return {"name": title, "artists": "Unknown", "artwork": None}
     except Exception as e:
         logger.error("HTML scrape exception: %s", e)
+    return None
+
+
+def _extract_track_ids_from_html(html: str) -> List[str]:
+    """
+    Best-effort extraction of track IDs from Spotify public page HTML.
+    """
+    patterns = [
+        r'"uri":"spotify:track:([A-Za-z0-9]+)"',
+        r'spotify:track:([A-Za-z0-9]+)',
+        r'spotify%3Atrack%3A([A-Za-z0-9]+)',
+        r'/track/([A-Za-z0-9]+)',
+    ]
+
+    seen = set()
+    ordered_ids: List[str] = []
+
+    for pattern in patterns:
+        for track_id in re.findall(pattern, html, flags=re.IGNORECASE):
+            if track_id not in seen:
+                seen.add(track_id)
+                ordered_ids.append(track_id)
+
+    return ordered_ids
+
+
+async def _get_spotify_track_oembed(
+    session: aiohttp.ClientSession,
+    track_id: str,
+) -> Optional[Dict]:
+    """
+    Fetch track metadata from Spotify oEmbed using a track URL.
+    """
+    try:
+        track_url = f"https://open.spotify.com/track/{track_id}"
+        async with session.get(
+            "https://open.spotify.com/oembed",
+            params={"url": track_url},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                title = (data.get("title") or "").strip()
+                artist = (data.get("author_name") or data.get("provider_name") or "Spotify").strip()
+                artwork = data.get("thumbnail_url")
+                return {"title": title, "artist": artist, "artwork": artwork}
+    except Exception as e:
+        logger.error("Track oEmbed exception for %s: %s", track_id, e)
     return None
 
 
@@ -308,7 +365,7 @@ class SpotifyResolver:
     ):
         if fallback_client_id and fallback_client_secret:
             self.official = SpotifyOfficialClient(fallback_client_id, fallback_client_secret)
-            logger.info("[SPOTIFY] SpotifyOfficialClient initialized dengan client_id: %s...", fallback_client_id[:8])
+            logger.info("[SPOTIFY] SpotifyOfficialClient initialized: %s...", fallback_client_id[:8])
         else:
             self.official = None
             logger.warning("[SPOTIFY] SpotifyOfficialClient TIDAK diinisialisasi - env vars kosong!")
@@ -316,14 +373,12 @@ class SpotifyResolver:
     @staticmethod
     def parse_url(url: str) -> Optional[Tuple[str, str]]:
         for pattern in SPOTIFY_URL_PATTERNS:
-            m = re.search(pattern, url)
+            m = re.search(pattern, url, flags=re.IGNORECASE)
             if m:
-                return m.group("type"), m.group("id")
+                return m.group("type").lower(), m.group("id")
         return None
 
-    async def resolve(
-        self, url: str, session: aiohttp.ClientSession
-    ) -> Tuple[List[ResolvedTrack], str]:
+    async def resolve(self, url: str, session: aiohttp.ClientSession) -> Tuple[List[ResolvedTrack], str]:
         parsed = self.parse_url(url)
         if not parsed:
             return [], "failed"
@@ -331,16 +386,17 @@ class SpotifyResolver:
         content_type, content_id = parsed
         sd = SpotifyDownClient(session)
 
-        if content_type == "playlist":
-            logger.info("[SPOTIFY] Detected playlist with ID: %s", content_id)
-            tracks, source = await self._resolve_playlist(content_id, sd, session, url)
-        elif content_type == "album":
-            logger.info("[SPOTIFY] Detected album with ID: %s", content_id)
-            tracks, source = await self._resolve_album(content_id, sd, session, url)
-        elif content_type == "track":
-            logger.info("[SPOTIFY] Detected track with ID: %s", content_id)
-            tracks, source = await self._resolve_track(content_id, sd, session, url)
-        else:
+        try:
+            if content_type == "playlist":
+                tracks, source = await self._resolve_playlist(content_id, sd, session, url)
+            elif content_type == "album":
+                tracks, source = await self._resolve_album(content_id, sd, session, url)
+            elif content_type == "track":
+                tracks, source = await self._resolve_track(content_id, sd, session, url)
+            else:
+                return [], "failed"
+        except Exception as e:
+            logger.exception("[SPOTIFY RESOLVE] Unhandled exception: %s", e)
             return [], "failed"
 
         logger.info("[SPOTIFY RESOLVE] %d tracks resolved via %s", len(tracks), source)
@@ -353,27 +409,30 @@ class SpotifyResolver:
         session: aiohttp.ClientSession,
         original_url: str,
     ) -> Tuple[List[ResolvedTrack], str]:
-        """
-        Resolves all tracks in a Spotify playlist using Official API first,
-        fallback ke SpotifyDown API jika Official API gagal.
-        """
-        # 1. Gunakan Official API terlebih dahulu
+        # 1) Spotify Official API
         if self.official:
             raw = await self.official.get_playlist_tracks(session, playlist_id)
             if raw:
-                return [
-                    self._track_to_resolved(t, t.get("id", ""), "spotify_official")
-                    for t in raw
-                ], "spotify_official"
+                return [self._track_to_resolved(t, t.get("id", ""), "spotify_official") for t in raw], "spotify_official"
 
-        # 2. Jika Official API gagal, coba SpotifyDown API
+        # 2) SpotifyDown API
         raw = await sd.get_playlist_tracks(playlist_id)
         if raw:
             return self._convert_sd_tracks(raw), "spotifydown"
 
-        # 3. Fallback: oEmbed / HTML (hanya 1 track info)
+        # 3) Best-effort scrape of public playlist page -> track IDs -> track oEmbed
+        scraped_tracks = await self._resolve_public_page_track_ids(
+            session=session,
+            page_url=original_url,
+            container_name="playlist",
+            container_id=playlist_id,
+        )
+        if scraped_tracks:
+            return scraped_tracks, "scrape_oembed"
+
+        # 4) Playlist metadata only
         meta = await _get_spotify_metadata_oembed(session, original_url)
-        if meta:
+        if meta and meta.get("name"):
             return [
                 ResolvedTrack(
                     name=meta["name"],
@@ -389,7 +448,7 @@ class SpotifyResolver:
             ], "oembed"
 
         meta = await _get_spotify_metadata_html(session, original_url)
-        if meta:
+        if meta and meta.get("name"):
             return [
                 ResolvedTrack(
                     name=meta["name"],
@@ -413,25 +472,39 @@ class SpotifyResolver:
         session: aiohttp.ClientSession,
         original_url: str,
     ) -> Tuple[List[ResolvedTrack], str]:
+        # 1) Spotify Official API
+        if self.official:
+            raw = await self.official.get_album_tracks(session, album_id)
+            if raw:
+                return [self._track_to_resolved(t, t.get("id", ""), "spotify_official") for t in raw], "spotify_official"
+
+        # 2) SpotifyDown API
         raw = await sd.get_album_tracks(album_id)
         if raw:
             return self._convert_sd_tracks(raw), "spotifydown"
 
-        if self.official:
-            raw = await self.official.get_album_tracks(session, album_id)
-            if raw:
-                return [
-                    self._track_to_resolved(t, t.get("id", ""), "spotify_official")
-                    for t in raw
-                ], "spotify_official"
+        # 3) Public page scrape
+        scraped_tracks = await self._resolve_public_page_track_ids(
+            session=session,
+            page_url=original_url,
+            container_name="album",
+            container_id=album_id,
+        )
+        if scraped_tracks:
+            return scraped_tracks, "scrape_oembed"
 
+        # 4) Album metadata only
         meta = await _get_spotify_metadata_oembed(session, original_url)
         if meta and meta.get("name"):
             return [
                 ResolvedTrack(
-                    name=meta["name"], artists=meta["artists"], album=meta["name"],
-                    duration_ms=None, artwork=meta.get("artwork"),
-                    spotify_id=album_id, youtube_id=None,
+                    name=meta["name"],
+                    artists=meta["artists"],
+                    album=meta["name"],
+                    duration_ms=None,
+                    artwork=meta.get("artwork"),
+                    spotify_id=album_id,
+                    youtube_id=None,
                     query=f"ytsearch:{meta['name']} {meta['artists']} album",
                     source="oembed",
                 )
@@ -446,30 +519,121 @@ class SpotifyResolver:
         session: aiohttp.ClientSession,
         original_url: str,
     ) -> Tuple[List[ResolvedTrack], str]:
+        # 1) SpotifyDown direct mapping
         yt_id = await sd.get_youtube_id(track_id)
         if yt_id:
             return [
                 ResolvedTrack(
-                    name=track_id, artists="", album=None, duration_ms=None,
-                    artwork=None, spotify_id=track_id, youtube_id=yt_id,
+                    name=track_id,
+                    artists="",
+                    album=None,
+                    duration_ms=None,
+                    artwork=None,
+                    spotify_id=track_id,
+                    youtube_id=yt_id,
                     query=f"https://youtube.com/watch?v={yt_id}",
                     source="spotifydown",
                 )
             ], "spotifydown"
 
+        # 2) Track oEmbed
+        meta = await _get_spotify_track_oembed(session, track_id)
+        if meta and meta.get("title"):
+            return [
+                ResolvedTrack(
+                    name=meta["title"],
+                    artists=meta["artist"],
+                    album=None,
+                    duration_ms=None,
+                    artwork=meta.get("artwork"),
+                    spotify_id=track_id,
+                    youtube_id=None,
+                    query=f"ytsearch:{meta['title']} {meta['artist']}",
+                    source="oembed_track",
+                )
+            ], "oembed_track"
+
+        # 3) Track page title fallback
         meta = await _get_spotify_metadata_oembed(session, original_url)
         if meta and meta.get("name"):
             return [
                 ResolvedTrack(
-                    name=meta["name"], artists=meta["artists"], album=None,
-                    duration_ms=None, artwork=meta.get("artwork"),
-                    spotify_id=track_id, youtube_id=None,
+                    name=meta["name"],
+                    artists=meta["artists"],
+                    album=None,
+                    duration_ms=None,
+                    artwork=meta.get("artwork"),
+                    spotify_id=track_id,
+                    youtube_id=None,
                     query=f"ytsearch:{meta['name']} {meta['artists']}",
                     source="oembed",
                 )
             ], "oembed"
 
         return [], "failed"
+
+    async def _resolve_public_page_track_ids(
+        self,
+        session: aiohttp.ClientSession,
+        page_url: str,
+        container_name: str,
+        container_id: str,
+    ) -> List[ResolvedTrack]:
+        """
+        Best-effort scrape:
+        - download public Spotify page HTML
+        - collect track IDs
+        - resolve each track via track oEmbed
+        """
+        try:
+            async with session.get(
+                page_url,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=aiohttp.ClientTimeout(total=12),
+            ) as resp:
+                if resp.status != 200:
+                    return []
+
+                html = await resp.text()
+        except Exception as e:
+            logger.error("[SPOTIFY SCRAPE] Failed to fetch %s page: %s", container_name, e)
+            return []
+
+        track_ids = _extract_track_ids_from_html(html)
+        if not track_ids:
+            return []
+
+        semaphore = asyncio.Semaphore(CONCURRENT_FETCH_LIMIT)
+        resolved: List[Optional[ResolvedTrack]] = [None] * len(track_ids)
+
+        async def worker(index: int, track_id: str) -> None:
+            async with semaphore:
+                meta = await _get_spotify_track_oembed(session, track_id)
+                if meta and meta.get("title"):
+                    title = meta["title"]
+                    artist = meta["artist"]
+                    artwork = meta.get("artwork")
+                else:
+                    title = f"Spotify Track {track_id}"
+                    artist = "Spotify"
+                    artwork = None
+
+                resolved[index] = ResolvedTrack(
+                    name=title,
+                    artists=artist,
+                    album=container_id if container_name == "album" else None,
+                    duration_ms=None,
+                    artwork=artwork,
+                    spotify_id=track_id,
+                    youtube_id=None,
+                    query=f"ytsearch:{title} {artist}",
+                    source="scrape_oembed",
+                )
+
+        await asyncio.gather(*(worker(i, tid) for i, tid in enumerate(track_ids)))
+
+        # type ignore not needed; filter None entries while preserving order
+        return [track for track in resolved if track is not None]
 
     def _convert_sd_tracks(self, raw_tracks: List[Dict]) -> List[ResolvedTrack]:
         result = []
@@ -481,19 +645,30 @@ class SpotifyResolver:
                     a.get("name", "") if isinstance(a, dict) else str(a)
                     for a in artists
                 )
+
             album = t.get("album")
             duration = t.get("duration")
             if duration and isinstance(duration, (int, float)) and duration < 10000:
                 duration = int(duration * 1000)
+
             artwork = t.get("cover", t.get("album_cover", t.get("artwork", "")))
             tid = t.get("id", "")
             yt_id = t.get("youtube_id") or t.get("yt_id")
             query = f"https://youtube.com/watch?v={yt_id}" if yt_id else f"ytsearch:{name} {artists}"
-            result.append(ResolvedTrack(
-                name=name, artists=artists, album=album, duration_ms=duration,
-                artwork=artwork, spotify_id=tid, youtube_id=yt_id,
-                query=query, source="spotifydown",
-            ))
+
+            result.append(
+                ResolvedTrack(
+                    name=name,
+                    artists=artists,
+                    album=album,
+                    duration_ms=duration,
+                    artwork=artwork,
+                    spotify_id=tid,
+                    youtube_id=yt_id,
+                    query=query,
+                    source="spotifydown",
+                )
+            )
         return result
 
     def _track_to_resolved(self, track_data: Dict, track_id: str, source: str) -> ResolvedTrack:
@@ -503,17 +678,26 @@ class SpotifyResolver:
         album_obj = track_data.get("album")
         if isinstance(album_obj, dict):
             album = album_obj.get("name")
+
         duration = track_data.get("duration_ms")
         artwork = None
         if isinstance(album_obj, dict):
             images = album_obj.get("images", [])
             if images:
                 artwork = images[0].get("url")
-        query = f"ytsearch:{artists} - {name}".strip(" -")
+
+        query = f"ytsearch:{name} {artists}".strip()
+
         return ResolvedTrack(
-            name=name, artists=artists, album=album, duration_ms=duration,
-            artwork=artwork, spotify_id=track_id, youtube_id=None,
-            query=query, source=source,
+            name=name,
+            artists=artists,
+            album=album,
+            duration_ms=duration,
+            artwork=artwork,
+            spotify_id=track_id,
+            youtube_id=None,
+            query=query,
+            source=source,
         )
 
     @staticmethod
@@ -525,9 +709,11 @@ class SpotifyResolver:
                     names.append(a.get("name", ""))
                 elif isinstance(a, str):
                     names.append(a)
-            return ", ".join(filter(None, names))
+            joined = ", ".join(filter(None, names))
+            return joined if joined else "Unknown"
         return str(artists) if artists else "Unknown"
 
 
 async def setup(bot):
-    pass
+    # utility module only
+    return
