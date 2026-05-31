@@ -95,22 +95,22 @@ class Music(commands.Cog):
         Returns: (added_count, list_of_playables)
         """
         added = 0
-        playables: list[wavelink.Playable] = []
+        playables: list[wavelink.Playable | None] = [None] * len(tracks)
         semaphore = asyncio.Semaphore(max_concurrent)
 
-        async def search_and_queue(track: ResolvedTrack):
+        async def search_and_queue(index: int, track: ResolvedTrack):
             nonlocal added
             async with semaphore:
                 playable = await self._search_single_resolved(track)
                 if playable:
-                    playables.append(playable)
+                    playables[index] = playable
                     added += 1
                     return True
                 return False
 
-        tasks = [search_and_queue(t) for t in tracks]
+        tasks = [search_and_queue(i, t) for i, t in enumerate(tracks)]
         await asyncio.gather(*tasks, return_exceptions=True)
-        return added, playables
+        return added, [p for p in playables if p is not None]
 
     # ==========================================================
     # [POLISH] HELPERS
@@ -427,19 +427,19 @@ class Music(commands.Cog):
 
                 # FIX: Urutan antrean playlist Spotify agar lagu nomor 1 selalu diproses duluan
                 if not player.current:
-    await player.set_volume(100)
+                    await player.set_volume(100)
 
-    for t in remaining_tracks:
-        await player.queue.put_wait(t)
+                    # Masukkan lagu sisanya ke queue dulu
+                    for t in remaining_tracks:
+                        await player.queue.put_wait(t)
 
-    await asyncio.sleep(0.3)
-    await player.play(first_track)
+                    await asyncio.sleep(0.3)
+                    await player.play(first_track)
+                else:
+                    await player.queue.put_wait(first_track)
 
-else:
-    await player.queue.put_wait(first_track)
-
-    for t in remaining_tracks:
-        await player.queue.put_wait(t)
+                    for t in remaining_tracks:
+                        await player.queue.put_wait(t)
 
                 # Update embed dengan info final
                 final_embed = discord.Embed(
