@@ -4,7 +4,7 @@ COG: AI Chat Module v4.6 — Hidden Hamlet Discord Bot
 ================================================================================
 File    : backend/cogs/ai_chat.py
 Deskripsi : Triple API Fallback — Google AI Studio (T1) → Groq (T2) → OpenRouter (T3)
-  • Tier 1: Google AI Studio — Primary (Gemini 2.5 Flash)
+  • Tier 1: Google AI Studio — Primary (Gemini 3.5 Flash)
   • Tier 2: Groq — Backup (Llama 3.3 70B Versatile)
   • Tier 3: OpenRouter — Last Resort (Gemini 2.5 Flash Free)
   • Lightweight Circuit Breaker: Gemini auto-skip 2h setelah 3x fail berturut-turut
@@ -35,7 +35,7 @@ DEFAULT_PERSONALITY = "friendly"
 
 # ── Tier 1: Google AI Studio ──
 GOOGLE_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
-GOOGLE_MODEL = "gemini-2.5-flash"
+GOOGLE_MODEL = "gemini-3.5-flash:generateContent"
 
 # ── Tier 2: Groq ──
 GROQ_API_BASE = "https://api.groq.com/openai/v1"
@@ -43,7 +43,7 @@ GROQ_MODEL = "llama-3.3-70b-versatile"
 
 # ── Tier 3: OpenRouter ──
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
-OPENROUTER_MODEL = "google/gemini-2.5-flash:free"
+OPENROUTER_MODEL = "google/gemini-3.5-flash:free"
 
 # ── Circuit Breaker ──
 CIRCUIT_BREAKER_THRESHOLD = 3       # fail streak sebelum circuit open
