@@ -629,7 +629,7 @@ class SpotifyResolver:
                     artwork=artwork,
                     spotify_id=track_id,
                     youtube_id=None,
-                    query=f"ytsearch:{title} {artist}",
+                    query=f"ytsearch:{artist} {title}",
                     source="scrape_oembed",
                 )
 
@@ -689,7 +689,7 @@ class SpotifyResolver:
             if images:
                 artwork = images[0].get("url")
 
-        query = f"ytsearch:{name} {artists}".strip()
+        query = f"ytsearch:{artists} - {name}".strip()
 
         return ResolvedTrack(
             name=name,
