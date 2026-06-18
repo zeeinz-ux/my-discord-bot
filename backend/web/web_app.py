@@ -1,9 +1,9 @@
-
 import os
 import threading
 import base64
 import traceback
 import io
+import asyncio
 from flask import Flask, render_template, jsonify, request, redirect
 from datetime import datetime, timezone
 from PIL import Image
@@ -112,6 +112,18 @@ def get_music_state(guild_id: str) -> dict:
     with _music_lock:
         return _music_states.get(guild_id, {"connected": False})
     
+# ==========================================================
+# Shared bot instance
+# ==========================================================
+_bot_instance = None
+
+def set_bot_instance(bot):
+    global _bot_instance
+    _bot_instance = bot
+
+def get_bot_instance():
+    return _bot_instance
+    
 
 # ==========================================================
 # API — Music
@@ -173,10 +185,91 @@ def api_music_queue_action():
 def api_music_control():
     data = request.get_json() or {}
 
-    return jsonify({
-        "success": True,
-        "message": f"Control {data.get('action')} received"
-    })
+    guild_id = data.get("guild_id")
+    action = data.get("action")
+
+    if not guild_id:
+        return jsonify({
+            "success": False,
+            "message": "guild_id required"
+        }), 400
+
+    bot = get_bot_instance()
+
+    if not bot:
+        return jsonify({
+            "success": False,
+            "message": "Bot unavailable"
+        }), 500
+
+    guild = bot.get_guild(int(guild_id))
+
+    if not guild:
+        return jsonify({
+            "success": False,
+            "message": "Guild not found"
+        }), 404
+
+    player = guild.voice_client
+
+    if not player:
+        return jsonify({
+            "success": False,
+            "message": "Player not connected"
+        }), 404
+
+    try:
+
+        if action == "pause":
+            asyncio.run_coroutine_threadsafe(
+                player.pause(True),
+                bot.loop
+            )
+
+        elif action == "play":
+            asyncio.run_coroutine_threadsafe(
+                player.pause(False),
+                bot.loop
+            )
+
+        elif action == "skip":
+            asyncio.run_coroutine_threadsafe(
+                player.stop(),
+                bot.loop
+            )
+
+        elif action == "stop":
+            asyncio.run_coroutine_threadsafe(
+                player.stop(),
+                bot.loop
+            )
+
+        elif action == "disconnect":
+            asyncio.run_coroutine_threadsafe(
+                player.disconnect(),
+                bot.loop
+            )
+
+        elif action == "volume":
+            volume = int(data.get("volume", 100))
+
+            asyncio.run_coroutine_threadsafe(
+                player.set_volume(volume),
+                bot.loop
+            )
+
+        return jsonify({
+            "success": True,
+            "action": action
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
     
 
 # ==========================================================
