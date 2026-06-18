@@ -1,7 +1,10 @@
 import sys
 import os
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 1def50041b7679583cf73b63db8bbcb48852d1e1
 # ==========================================================
 # FIX: Agar Python bisa menemukan package 'backend'
 # ==========================================================
@@ -22,11 +25,21 @@ import importlib
 load_dotenv()
 
 # ===== INIT FIREBASE SEBELUM LOAD COGS =====
+<<<<<<< HEAD
 from backend.cogs.database import firebase_setup
 # ============================================
 
 # ===== [DASHBOARD] Import Flask app dari web/ =====
 from backend.web.web_app import app, set_stats, set_guild_channels
+=======
+from backend.cogs import firebase_setup
+# ============================================
+
+# ===== [DASHBOARD] Import Flask app dari web/ =====
+from backend.web.web_app import (
+    app, set_stats, set_guild_channels, set_music_voice_channels, set_music_state
+)
+>>>>>>> 1def50041b7679583cf73b63db8bbcb48852d1e1
 # ==================================================
 
 # ===== [UTILS] Shared constants =====
@@ -41,13 +54,19 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 start_time = time.time()
 
+
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
+
 flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> 1def50041b7679583cf73b63db8bbcb48852d1e1
 # ===== LAVALINK: PUBLIC NODE =====
 @bot.event
 async def setup_hook():
@@ -71,6 +90,10 @@ async def setup_hook():
 
     print("[LAVALINK] ⚠️ Lavalink tidak tersedia. Fitur musik mati.")
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> 1def50041b7679583cf73b63db8bbcb48852d1e1
 # [POLISH] Lavalink auto-reconnect loop
 @tasks.loop(seconds=60)
 async def lavalink_healthcheck():
@@ -84,12 +107,14 @@ async def lavalink_healthcheck():
         except Exception as e:
             print(f"[LAVALINK] ❌ Reconnect gagal: {e}")
 
+
 @lavalink_healthcheck.before_loop
 async def before_healthcheck():
     await bot.wait_until_ready()
 
+
 # ===== [DASHBOARD] Stats updater loop =====
-@tasks.loop(seconds=30)
+@tasks.loop(seconds=5)  # [FIX] Dipercepat dari 30s ke 5s untuk real-time
 async def update_stats():
     try:
         nodes = wavelink.Pool.nodes
@@ -119,8 +144,15 @@ async def update_stats():
                     "artwork": vc.current.artwork or ""
                 })
 
+<<<<<<< HEAD
         # Sync guild channels untuk dropdown
+=======
+        # ==========================================================
+        # [v4.6] Sync guild channels untuk dropdown
+        # ==========================================================
+>>>>>>> 1def50041b7679583cf73b63db8bbcb48852d1e1
         for guild in bot.guilds:
+            # Text channels (untuk AI Chat, Welcome, dll)
             text_channels = [
                 {"id": str(ch.id), "name": ch.name}
                 for ch in guild.text_channels
@@ -128,6 +160,17 @@ async def update_stats():
             ]
             set_guild_channels(str(guild.id), text_channels)
 
+<<<<<<< HEAD
+=======
+            # Voice channels (untuk Music Now Playing dropdown)
+            voice_channels = [
+                {"id": str(ch.id), "name": ch.name}
+                for ch in guild.voice_channels
+                if ch.permissions_for(guild.me).connect
+            ]
+            set_music_voice_channels(str(guild.id), voice_channels)
+
+>>>>>>> 1def50041b7679583cf73b63db8bbcb48852d1e1
         # Guilds list untuk sidebar
         guilds_list = [
             {"id": str(g.id), "name": g.name, "member_count": g.member_count or 0}
@@ -146,12 +189,66 @@ async def update_stats():
             guilds_list=guilds_list
         )
 
+        # ==========================================================
+        # [FIX v4.6.1] Sync music state cache untuk Now Playing API
+        # ==========================================================
+        for guild in bot.guilds:
+            vc = guild.voice_client
+            guild_id_str = str(guild.id)
+            if vc and getattr(vc, "current", None):
+                ch = getattr(vc, "channel", None)
+                listeners = 0
+                if ch:
+                    listeners = len([m for m in ch.members if not m.bot])
+
+                # Build queue list with proper format for frontend
+                queue_list = []
+                queue_total_ms = 0
+                if hasattr(vc, "queue"):
+                    for t in list(vc.queue):
+                        queue_list.append({
+                            "title": t.title,
+                            "author": t.author or "Unknown",
+                            "duration": (t.length or 0) // 1000,
+                            "thumbnail": t.artwork or "",
+                            "uri": t.uri or ""
+                        })
+                        queue_total_ms += (t.length or 0)
+
+                set_music_state(guild_id_str, {
+                    "connected": True,
+                    "playing": not getattr(vc, "paused", False),
+                    "paused": getattr(vc, "paused", False),
+                    "channel_name": ch.name if ch else "Unknown",
+                    "channel_id": str(ch.id) if ch else None,
+                    "position": (getattr(vc, "position", 0) or 0) // 1000,
+                    "track": {
+                        "title": vc.current.title,
+                        "artist": vc.current.author or "Unknown",
+                        "duration": (vc.current.length or 0) // 1000,
+                        "thumbnail": vc.current.artwork or "",
+                        "uri": vc.current.uri or ""
+                    },
+                    "queue": queue_list,
+                    "queue_count": len(queue_list),
+                    "queue_duration": queue_total_ms // 1000,
+                    "listeners": listeners,
+                })
+            else:
+                # Bersihkan state kalau bot tidak di VC atau tidak ada lagu
+                set_music_state(guild_id_str, {"connected": False})
+
     except Exception as e:
         print(f"[DASHBOARD STATS ERROR] {e}")
+
 
 @update_stats.before_loop
 async def before_update_stats():
     await bot.wait_until_ready()
+<<<<<<< HEAD
+=======
+
+>>>>>>> 1def50041b7679583cf73b63db8bbcb48852d1e1
 
 @bot.event
 async def on_ready():
@@ -161,6 +258,7 @@ async def on_ready():
     print("=" * 50)
 
     # ===== FIX: Load cogs dari path absolut =====
+<<<<<<< HEAD
     # [v4.1 UPDATE] Exclude spotify_down.py (utility, bukan cog)
     # ===== FIX: Load cogs dari subfolder (Rekursif) =====
     cogs_dir = os.path.join(_project_root, "backend", "cogs")
@@ -198,6 +296,24 @@ async def on_ready():
                 await bot.load_extension(full_module)
                 
                 print(f"[COG] 📦 Loaded: {module_path}")
+=======
+    # [v4.6 UPDATE] Exclude web_app.py (bukan cog)
+    cogs_dir = os.path.join(_project_root, "backend", "cogs")
+    cog_count = 0
+    exclude_files = (
+        "__init__.py",
+        "firebase_setup.py",
+        "spotify_down.py",
+        "web_app.py",
+    )
+
+    for filename in os.listdir(cogs_dir):
+        if filename.endswith(".py") and filename not in exclude_files:
+            cog_name = filename[:-3]
+            try:
+                await bot.load_extension(f"backend.cogs.{cog_name}")
+                print(f"[COG] 📦 Loaded: {filename}")
+>>>>>>> 1def50041b7679583cf73b63db8bbcb48852d1e1
                 cog_count += 1
                 
             except Exception as e:
@@ -223,9 +339,10 @@ async def on_ready():
 
     if not update_stats.is_running():
         update_stats.start()
-        print("[DASHBOARD] 📊 Stats updater aktif (30s).")
+        print("[DASHBOARD] 📊 Stats updater aktif (5s).")
 
     print("=" * 50)
+
 
 TOKEN = os.getenv("TOKEN_BOT")
 if not TOKEN:
