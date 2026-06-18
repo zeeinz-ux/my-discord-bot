@@ -1,8 +1,9 @@
 import discord
 from discord.ext import commands
 import datetime
-# Import SpamEngine dari folder utils
-from ...utils.spam_engine import SpamEngine 
+import asyncio
+from ...utils.spam_engine import SpamEngine
+from ..database.firebase_setup import db
 
 class Moderation(commands.Cog):
     def __init__(self, bot):
@@ -38,14 +39,39 @@ class Moderation(commands.Cog):
 
     async def handle_spam(self, message, reason):
         try:
-            # Hapus pesan
+            # 1. Hapus pesan spam
             await message.delete()
+
+            # 2. Ambil/Update data strike dari Firestore
+            user_id = str(message.author.id)
+            doc_ref = db.collection("strikes").document(user_id)
             
-            # Timeout 1 jam
-            duration = datetime.timedelta(hours=1)
-            await message.author.timeout(duration, reason=f"Spam: {reason}")
+            # Gunakan asyncio.to_thread karena Firestore memblokir thread utama
+            doc = await asyncio.to_thread(doc_ref.get)
+            strikes = doc.to_dict().get("count", 0) if doc.exists else 0
             
-            print(f"[MODERATION] {message.author} terkena moderasi: {reason}")
+            strikes += 1
+            await asyncio.to_thread(doc_ref.set, {"count": strikes})
+
+            # 3. Logika Eskalasi Hukuman
+            if strikes >= 3:
+                # Strike 3: Ban Permanent
+                await message.author.ban(reason=f"Auto-Ban: Spam berulang ({strikes}x) - {reason}")
+                await message.channel.send(f"🚫 {message.author.mention} telah di-BAN permanen karena spam berulang.")
+            
+            elif strikes == 2:
+                # Strike 2: Kick
+                await message.author.kick(reason=f"Auto-Kick: Spam berulang ({strikes}x) - {reason}")
+                await message.channel.send(f"⚠️ {message.author.mention} telah di-KICK karena pelanggaran spam berulang.")
+            
+            else:
+                # Strike 1: Timeout 1 jam (Peringatan pertama)
+                duration = datetime.timedelta(hours=1)
+                await message.author.timeout(duration, reason=f"Spam: {reason}")
+                await message.channel.send(f"⚠️ {message.author.mention} telah di-timeout 1 jam. Ini adalah peringatan ke-{strikes}.")
+
+            print(f"[MODERATION] {message.author} Strike {strikes}: {reason}")
+        
         except Exception as e:
             print(f"[ERROR] Gagal moderasi: {e}")
 
