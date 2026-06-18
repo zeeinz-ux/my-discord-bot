@@ -444,21 +444,54 @@ class Music(commands.Cog):
                 # Jalankan worker di background thread asyncio
                 asyncio.create_task(bg_playlist_loader(player, remaining_resolved))
 
-                # 4. TAMPILKAN EMBED RESPONSE INSTAN (Kelebihan bot premium)
-                final_embed = discord.Embed(
-                    title=f"🎵 {spotify_type.title()} Added (Instant Load)",
-                    color=discord.Color.green(),
-                )
+                # ==========================================================
+                # 4. TAMPILKAN EMBED RESPONSE PREMIUM (Ala Jockie Music 🎶)
+                # ==========================================================
                 playlist_name = resolved_tracks[0].album or f"Spotify {spotify_type.title()}"
-                final_embed.add_field(name="Playlist", value=f"**{playlist_name}**", inline=False)
-                final_embed.add_field(name="Tracks", value=f"`{total_tracks}` lagu didaftarkan", inline=True)
-                final_embed.add_field(name="Total Duration", value=f"`{total_duration}`", inline=True)
+                
+                # Menggunakan warna hijau resmi Spotify (RGB: 29, 185, 84)
+                final_embed = discord.Embed(
+                    description=f"📁 **{playlist_name}**",
+                    color=discord.Color.from_rgb(29, 185, 84)
+                )
+                
+                # Memasang Author Header biar judul di atas keliatan bersih tanpa gumpalan teks bold
+                final_embed.set_author(
+                    name=f"🎶 Added to Queue ({spotify_type.title()})",
+                    icon_url=interaction.user.display_avatar.url
+                )
+                
+                # Membuat struktur grid 3 kolom yang sejajar menggunakan inline=True
+                final_embed.add_field(
+                    name="🔢 Jumlah Lagu", 
+                    value=f"`{total_tracks} Lagu`", 
+                    inline=True
+                )
+                final_embed.add_field(
+                    name="⏳ Total Durasi", 
+                    value=f"`{total_duration}`", 
+                    inline=True
+                )
+                final_embed.add_field(
+                    name="👤 Request Oleh", 
+                    value=interaction.user.mention, 
+                    inline=True
+                )
+                
+                # Memasang gambar cover album/playlist di sebelah kanan embed
                 if thumbnail:
                     final_embed.set_thumbnail(url=thumbnail)
                 
-                # Cek status pemutaran untuk teks footer
-                status_text = f"▶️ Sekarang memutar: {first_track.title[:40]}..." if player.current == first_track else "📥 Dimasukkan ke dalam antrean"
-                final_embed.set_footer(text=f"{status_text} | ⚡ Sisa lagu dimuat di background.")
+                # Menentukan teks status pemutaran untuk ditaruh di footer bawah
+                if player.current == first_track:
+                    status_text = f"▶️ Sekarang Memutar: {first_track.title[:35]}..."
+                else:
+                    status_text = "📥 Dimasukkan ke ujung antrean"
+                    
+                final_embed.set_footer(
+                    text=f"{status_text} | ⚡ Sisa lagu dimuat di background.",
+                    icon_url=self.bot.user.display_avatar.url
+                )
 
                 await loading_msg.edit(content=None, embed=final_embed)
                 return
