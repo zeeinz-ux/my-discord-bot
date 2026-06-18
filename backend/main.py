@@ -28,10 +28,6 @@ from backend.cogs.database import firebase_setup
 from backend.web.web_app import (app, set_stats, set_guild_channels, set_music_state, set_bot_instance)
 # ==================================================
 
-# ===== [UTILS] Shared constants =====
-from backend.utils.constants import LAVALINK_NODES
-# =====================================
-
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -50,41 +46,62 @@ def run_flask():
 flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
-# ===== LAVALINK: PUBLIC NODE =====
+
+# ==========================================================
+# [UPDATE] LAVALINK: PRIVATE COYEB SERVER CONNECTION
+# ==========================================================
 @bot.event
 async def setup_hook():
-    nodes = [
-        wavelink.Node(uri=node["uri"], password=node["password"])
-        for node in LAVALINK_NODES
-    ]
+    # Mengambil konfigurasi secara aman dari Environment Variables Render
+    lavalink_url = os.getenv("LAVALINK_URL")
+    lavalink_password = os.getenv("LAVALINK_PASSWORD")
 
-    for i, node in enumerate(nodes, 1):
-        try:
-            await asyncio.wait_for(
-                wavelink.Pool.connect(nodes=[node], client=bot),
-                timeout=15.0
-            )
-            print(f"[LAVALINK] ✅ Node {i} tersambung: {node.uri}")
-            return
-        except asyncio.TimeoutError:
-            print(f"[LAVALINK] ⏱️ Node {i} timeout: {node.uri}")
-        except Exception as e:
-            print(f"[LAVALINK] ❌ Node {i} gagal: {str(e)[:80]}")
+    if not lavalink_url or not lavalink_password:
+        print("[LAVALINK] ❌ ERROR: LAVALINK_URL atau LAVALINK_PASSWORD belum diset di Render Dashboard!")
+        print("[LAVALINK] Fitur musik tidak akan berjalan dengan benar.")
+        return
 
-    print("[LAVALINK] ⚠️ Lavalink tidak tersedia. Fitur musik mati.")
+    # Inisialisasi Single Private Node milik lu sendiri
+    node = wavelink.Node(
+        identifier="PrivateLavalink",
+        uri=lavalink_url,
+        password=lavalink_password
+    )
 
-# [POLISH] Lavalink auto-reconnect loop
+    try:
+        print(f"[LAVALINK] 🔄 Mencoba terhubung ke Private Server: {lavalink_url}...")
+        await asyncio.wait_for(
+            wavelink.Pool.connect(nodes=[node], client=bot),
+            timeout=15.0
+        )
+        print(f"[LAVALINK] ✅ BERHASIL TERHUBUNG: Node private lu siap digunakan!")
+    except asyncio.TimeoutError:
+        print(f"[LAVALINK] ⏱️ Timeout saat mencoba menghubungi server Koyeb.")
+    except Exception as e:
+        print(f"[LAVALINK] ❌ Gagal terkoneksi ke Private Node: {e}")
+
+
+# ==========================================================
+# [UPDATE] Lavalink auto-reconnect loop khusus Private Server
+# ==========================================================
 @tasks.loop(seconds=60)
 async def lavalink_healthcheck():
     if not wavelink.Pool.nodes:
-        print("[LAVALINK] ⚠️ Node tidak terdeteksi, mencoba reconnect...")
-        node_cfg = LAVALINK_NODES[0]
-        node = wavelink.Node(uri=node_cfg["uri"], password=node_cfg["password"])
-        try:
-            await wavelink.Pool.connect(nodes=[node], client=bot)
-            print("[LAVALINK] ✅ Reconnect berhasil!")
-        except Exception as e:
-            print(f"[LAVALINK] ❌ Reconnect gagal: {e}")
+        print("[LAVALINK] ⚠️ Koneksi terputus, mencoba auto-reconnect ke Private Server...")
+        lavalink_url = os.getenv("LAVALINK_URL")
+        lavalink_password = os.getenv("LAVALINK_PASSWORD")
+        
+        if lavalink_url and lavalink_password:
+            node = wavelink.Node(
+                identifier="PrivateLavalink",
+                uri=lavalink_url,
+                password=lavalink_password
+            )
+            try:
+                await wavelink.Pool.connect(nodes=[node], client=bot)
+                print("[LAVALINK] ✅ Auto-reconnect Berhasil!")
+            except Exception as e:
+                print(f"[LAVALINK] ❌ Auto-reconnect Gagal: {e}")
 
 
 @lavalink_healthcheck.before_loop
@@ -93,7 +110,7 @@ async def before_healthcheck():
 
 
 # ===== [DASHBOARD] Stats updater loop =====
-@tasks.loop(seconds=5)  # [FIX] Dipercepat dari 30s ke 5s untuk real-time
+@tasks.loop(seconds=5)
 async def update_stats():
     try:
         nodes = wavelink.Pool.nodes
@@ -125,7 +142,6 @@ async def update_stats():
 
         # Sync guild channels untuk dropdown
         for guild in bot.guilds:
-            # Text channels (untuk AI Chat, Welcome, dll)
             text_channels = [
                 {"id": str(ch.id), "name": ch.name}
                 for ch in guild.text_channels
@@ -151,9 +167,7 @@ async def update_stats():
             guilds_list=guilds_list
         )
 
-        # ==========================================================
-        # [FIX v4.6.1] Sync music state cache untuk Now Playing API
-        # ==========================================================
+        # Sync music state cache untuk Now Playing API
         for guild in bot.guilds:
             vc = guild.voice_client
             guild_id_str = str(guild.id)
@@ -163,7 +177,6 @@ async def update_stats():
                 if ch:
                     listeners = len([m for m in ch.members if not m.bot])
 
-                # Build queue list with proper format for frontend
                 queue_list = []
                 queue_total_ms = 0
                 if hasattr(vc, "queue"):
@@ -197,7 +210,6 @@ async def update_stats():
                     "listeners": listeners,
                 })
             else:
-                # Bersihkan state kalau bot tidak di VC atau tidak ada lagu
                 set_music_state(guild_id_str, {"connected": False})
 
     except Exception as e:
@@ -208,6 +220,7 @@ async def update_stats():
 async def before_update_stats():
     await bot.wait_until_ready()
 
+
 @bot.event
 async def on_ready():
     print("=" * 50)
@@ -215,35 +228,26 @@ async def on_ready():
     print(f"[STATUS] Terhubung ke {len(bot.guilds)} server Discord.")
     print("=" * 50)
 
-    # ===== FIX: Load cogs dari path absolut =====
-    # [v4.1 UPDATE] Exclude spotify_down.py (utility, bukan cog)
-    # ===== FIX: Load cogs dari subfolder (Rekursif) =====
     cogs_dir = os.path.join(_project_root, "backend", "cogs")
     cog_count = 0
     
-    # os.walk akan mencari file di semua subfolder
     for root, dirs, files in os.walk(cogs_dir):
         for filename in files:
-            # Skip file non-cog
             if not filename.endswith(".py") or filename == "__init__.py":
                 continue
                 
-            # Abaikan file helper/utility yang bukan Cogs
-            
             if filename in ["firebase_setup.py", "spotify_down.py"]:
                 continue
 
-            # Buat path module, contoh: backend.cogs.moderation.moderation
             rel_path = os.path.relpath(
                 os.path.join(root, filename),
                 os.path.join(_project_root, "backend")
-                )
+            )
             
             module_path = rel_path.replace(os.sep, ".")[:-3]
             
             try:
                 full_module = f"backend.{module_path}"
-                
                 module = importlib.import_module(full_module)
                 
                 if not hasattr(module, "setup"):
@@ -251,7 +255,6 @@ async def on_ready():
                     continue
                 
                 await bot.load_extension(full_module)
-                
                 print(f"[COG] 📦 Loaded: {module_path}")
                 cog_count += 1
                 
