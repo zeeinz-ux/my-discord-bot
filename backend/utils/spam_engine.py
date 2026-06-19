@@ -6,20 +6,24 @@ class SpamEngine:
         # Regex untuk link mencurigakan dan keyword judi
         self.banned_patterns = [
             r"https?://(bit\.ly|t\.co|tinyurl\.com|shorturl\.at)", # Shortener link
-            r"(slot|judi|deposit|gacor|win)", # Keyword umum
+            r"(slot|judi|deposit|gacor|maxwin|bigwin)",          # 🌟 Diubah dari 'win' jadi 'maxwin/bigwin'
             r"(join now|click here|free crypto|giveaway)"
         ]
         self.compiled_patterns = [re.compile(p, re.IGNORECASE) for p in self.banned_patterns]
 
     def get_risk_score(self, message) -> int:
+        # Jika user adalah moderator/admin yang bisa manage message, bypass langsung (skor 0)
         if hasattr(message.author, 'guild_permissions') and message.author.guild_permissions.manage_messages:
             return 0
+        
+        # 🌟 DEKLARASI UTAMA: Wajib dimulai dari 0 agar tidak UnboundLocalError
+        score = 0 
         
         # Layer 1: Heuristic (Ringan)
         if hasattr(message, 'mention_everyone') and message.mention_everyone: 
             score += 5
         
-        # Check kata kunci
+        # Check kata kunci / regex
         for pattern in self.compiled_patterns:
             if pattern.search(message.content):
                 score += 3
