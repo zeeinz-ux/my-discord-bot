@@ -630,9 +630,6 @@ class AIChat(commands.Cog):
         await self._save_chat_history(guild_id, user_id, user_message, response_text, personality)
         await self._send_response(ctx, user_id, response_text)
 
-    # ═══════════════════════════════════════════════════════════════════════
-    # SLASH COMMAND: /ask
-    # ═══════════════════════════════════════════════════════════════════════
     @app_commands.command(name="ask", description="Tanya apa saja ke AI Hidden Hamlet")
     @app_commands.describe(pertanyaan="Apa yang mau ditanyakan?")
     async def ask(self, interaction: discord.Interaction, pertanyaan: str):
@@ -641,16 +638,25 @@ class AIChat(commands.Cog):
         user_id = str(interaction.user.id)
         now = datetime.now(timezone.utc).timestamp()
 
-        # DEFER FIRST — sebelum cooldown check!
-        await interaction.response.defer(thinking=False )
-
+        # 1. COOLDOWN CHECK DULUAN
         key = (guild_id, user_id)
         last_used = self._cooldowns.get(key, 0)
         if now - last_used < COOLDOWN_SECONDS:
             retry_after = COOLDOWN_SECONDS - (now - last_used)
-            await interaction.followup.send(f"⏳ Sabar bro! Tunggu **{retry_after:.1f} detik** lagi.")
+            # Karena belum di-defer, pake send_message, bukan followup
+            await interaction.response.send_message(f"⏳ Sabar bro! Tunggu **{retry_after:.1f} detik** lagi.", ephemeral=True)
             return
 
+        # 2. DEFER SETELAH LOLOS COOLDOWN
+        try:
+            # thinking=True biar muncul status "is thinking..."
+            await interaction.response.defer(thinking=True) 
+        except discord.errors.HTTPException as e:
+            if e.status == 429:
+                print(f"[AI CHAT] ⚠️ Kena Rate Limit saat defer!")
+                return # Jangan lanjut kalau kena rate limit
+
+        # 3. SET COOLDOWN & PROSES
         self._cooldowns[key] = now
 
         try:
@@ -663,6 +669,7 @@ class AIChat(commands.Cog):
         except Exception as e:
             print(f"[AI CHAT] ❌ Fatal error di /ask: {e}")
             try:
+                # Pake followup karena tadi udah di-defer
                 await interaction.followup.send("❌ Terjadi error internal. Coba lagi nanti ya!")
             except Exception:
                 pass
