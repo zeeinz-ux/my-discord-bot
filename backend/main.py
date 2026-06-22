@@ -34,6 +34,40 @@ intents.message_content = True
 intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+@tasks.loop(seconds=20.0)
+async def sync_music_to_dashboard():
+    # 1. Update stats umum (guild count, dll)
+    stats = {
+        "online": True,
+        "guilds": len(bot.guilds),
+        "members": sum(g.member_count for g in bot.guilds),
+        "lavalink_connected": bool(wavelink.Pool.nodes)
+    }
+    set_stats(stats)
+
+    # 2. Update status musik tiap guild
+    for guild in bot.guilds:
+        player = guild.voice_client
+        if player:
+            state = {
+                "connected": True,
+                "current": player.current.title if player.current else "None",
+                "queue_count": len(player.queue)
+            }
+            set_music_state(str(guild.id), state)
+        else:
+            set_music_state(str(guild.id), {"connected": False})
+
+# Jalankan task-nya pas bot nyala
+@bot.event
+async def on_ready():
+    # ... kode existing lu (sync command dll) ...
+    
+    if not sync_music_to_dashboard.is_running():
+        sync_music_to_dashboard.start()
+        print("[TASKS] ✅ Sync stats ke dashboard aktif!")
+        
 set_bot_instance(bot)
 start_time = time.time()
 
