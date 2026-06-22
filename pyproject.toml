@@ -1,0 +1,15 @@
+[project]
+name = "my-discord-bot"
+version = "0.1.0"
+description = "Discord bot with Flask backend"
+requires-python = ">=3.9"
+
+[tool.vercel]
+# Format: module_path:variable
+# module_path = lokasi file relatif ke root project, pakai titik (.)
+# variable = nama objek Flask (biasanya 'app')
+entrypoint = "backend.web.web_app:app"
+
+[tool.poetry.dependencies]
+flask = "^2.3.0"
+gunicorn = "^21.0.0"
