@@ -1,63 +1,84 @@
 import os
 import json
+import base64
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-db = None
+# Variabel internal untuk menyimpan instance database
+_db_instance = None
 
 def init_firebase():
-    """Initialize Firebase Firestore with dual mode support (VS Code / Replit / Render)"""
-    global db
+    """Inisialisasi Firebase aman untuk VS Code (Lokal) dan Render (Production)"""
+    global _db_instance
 
+    # Jika sudah terinisialisasi sebelumnya, pakai yang sudah ada
     if firebase_admin._apps:
-        print("[FIREBASE] ℹ️ Firebase sudah di-init sebelumnya.")
-        db = firestore.client()
-        return db
+        _db_instance = firestore.client()
+        return _db_instance
 
-    firebase_key = os.getenv("FIREBASE_KEY", "")
+    firebase_key = os.getenv("FIREBASE_KEY", "").strip()
+
+    if not firebase_key:
+        print("[FIREBASE] ❌ Error: Environment Variable 'FIREBASE_KEY' tidak ditemukan!")
+        return None
 
     try:
-        # Resolve path relative ke backend/ folder
-        _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        cred_path = os.path.join(_backend_dir, firebase_key)
+        cred = None
 
-        # Fallback: kalau tidak ada di backend/, cek root project (untuk Render Secret Files)
-        if not os.path.isfile(cred_path):
-            root_dir = os.path.dirname(_backend_dir)
-            cred_path = os.path.join(root_dir, firebase_key)
-            print(f"[FIREBASE] 🔍 Fallback ke root: {cred_path}")
+        # --- MODE 1: BASE64 ENCODED (Rekomendasi Utama untuk Render) ---
+        if not firebase_key.startswith("{") and len(firebase_key) > 100:
+            print("[FIREBASE] 🔐 Mendeteksi mode Base64. Mengonversi ke JSON...")
+            decoded_bytes = base64.b64decode(firebase_key)
+            service_account_info = json.loads(decoded_bytes.decode("utf-8"))
+            cred = credentials.Certificate(service_account_info)
 
-        # Mode 1: VS Code / Render dengan path file
-        if os.path.isfile(cred_path):
-            print(f"[FIREBASE] 📁 Menggunakan file: {cred_path}")
-            cred = credentials.Certificate(cred_path)
-
-        # Mode 2: Replit (JSON string 1 baris)
-        elif firebase_key.strip().startswith("{"):
-            print("[FIREBASE] 📄 Menggunakan JSON string (Replit mode)")
+        # --- MODE 2: RAW JSON STRING (Replit / Env String) ---
+        elif firebase_key.startswith("{"):
+            print("[FIREBASE] 📄 Mendeteksi mode Raw JSON String.")
             service_account_info = json.loads(firebase_key)
             cred = credentials.Certificate(service_account_info)
 
+        # --- MODE 3: FILE PATH FALLBACK (VS Code Lokal / Render Secret Files) ---
         else:
-            print("[FIREBASE] ❌ FIREBASE_KEY tidak valid!")
-            print(f"         Cek path backend: {os.path.join(_backend_dir, firebase_key)}")
-            print(f"         Cek path root: {os.path.join(os.path.dirname(_backend_dir), firebase_key)}")
-            return None
+            print("[FIREBASE] 📁 Mendeteksi mode File Path. Mencari lokasi file...")
+            current_dir = os.path.dirname(os.path.abspath(__file__)) # backend/cogs/database
+            
+            # Melacak kecocokan file dari folder terdalam sampai root project
+            possible_paths = [
+                os.path.abspath(os.path.join(current_dir, firebase_key)),         # di folder database/
+                os.path.abspath(os.path.join(current_dir, "..", firebase_key)),     # di folder cogs/
+                os.path.abspath(os.path.join(current_dir, "../..", firebase_key)),   # di folder backend/
+                os.path.abspath(os.path.join(current_dir, "../../..", firebase_key)), # di Root Project (/)
+                os.path.abspath(firebase_key)                                       # Absolute path langsung
+            ]
 
-        # ← HANYA Firestore, TIDAK pakai Storage (FREE tier)
+            for path in possible_paths:
+                if os.path.isfile(path):
+                    print(f"[FIREBASE] ✅ File ditemukan di: {path}")
+                    cred = credentials.Certificate(path)
+                    break
+            
+            if not cred:
+                print(f"[FIREBASE] ❌ File '{firebase_key}' tidak ditemukan di folder manapun!")
+                return None
+
+        # Hubungkan ke Firebase
         firebase_admin.initialize_app(cred)
-
-        db = firestore.client()
-        print("[FIREBASE] ✅ Berhasil terhubung ke Firestore!")
-        return db
+        _db_instance = firestore.client()
+        print("[FIREBASE] 🔥 Berhasil terhubung ke Firestore!")
+        return _db_instance
 
     except Exception as e:
-        print(f"[FIREBASE] ❌ Gagal init Firebase: {e}")
+        print(f"[FIREBASE] ❌ Gagal total saat inisialisasi: {e}")
+        _db_instance = None
         return None
 
-# Init saat import module
-<<<<<<< HEAD:backend/cogs/database/firebase_setup.py
+def get_db():
+    """Fungsi panggil global agar Flask selalu mendapatkan koneksi db yang siap pakai"""
+    global _db_instance
+    if _db_instance is None:
+        return init_firebase()
+    return _db_instance
+
+# Jalankan otomatis saat bot/web pertama kali dinyalakan
 db = init_firebase()
-=======
-db = init_firebase()
->>>>>>> 1def50041b7679583cf73b63db8bbcb48852d1e1:backend/cogs/firebase_setup.py

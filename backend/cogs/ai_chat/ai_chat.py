@@ -29,8 +29,11 @@ from discord import app_commands
 from discord.ext import commands
 
 import aiohttp
+import tenacity
 
 from ..database.firebase_setup import db
+from ...utils.spam_engine import SpamEngine
+from ...utils.intent_router import detect_intent
 
 # ── Konstanta ──
 MAX_HISTORY_PAIRS = 5
@@ -39,7 +42,7 @@ DEFAULT_PERSONALITY = "friendly"
 
 # ── Tier 1: Google AI Studio ──
 GOOGLE_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
-GOOGLE_MODEL = "gemini-3.5-flash:generateContent"
+GOOGLE_MODEL = "gemini-3.5-flash"
 
 # ── Tier 2: Groq ──
 GROQ_API_BASE = "https://api.groq.com/openai/v1"
@@ -68,12 +71,16 @@ Aturan:
 • Jika ditanya hal terkait server, gunakan [CONTEXT SERVER] di bawah ini sebagai referensi UTAMA.
 
 {server_context}
-"""
 
+"""
+# FUNGSI INI WAJIB ADA: Mencegah RetryError crash, dan oper balik status gagal
+def return_failure_tuple(retry_state):
+    return "RETRY_LIMIT_EXCEEDED", False
 
 class AIChat(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.engine = SpamEngine()
         self._cooldowns: Dict[tuple, float] = {}
 
         # API Keys
@@ -102,19 +109,19 @@ class AIChat(commands.Cog):
         print("[AI CHAT] ✅ Cog loaded. Triple API: Google → Groq → OpenRouter")
 
     async def cog_load(self):
-      if self.session and not self.session.closed:
-        return
+        if self.session and not self.session.closed:
+            return
       
-      timeout = aiohttp.ClientTimeout(
-        total=30,
-        connect=10
+        timeout = aiohttp.ClientTimeout(
+            total=30,
+            connect=10
         )
       
-      self.session = aiohttp.ClientSession(
-        timeout=timeout
+        self.session = aiohttp.ClientSession(
+            timeout=timeout
         )
       
-      print("[AI CHAT] ✅ HTTP session initialized")
+        print("[AI CHAT] ✅ HTTP session initialized")
 
     async def cog_unload(self):
         if self.session:
@@ -148,7 +155,17 @@ class AIChat(commands.Cog):
        now = datetime.now(timezone.utc).timestamp()
        # Hanya simpan user yang cooldown-nya masih aktif (< 60 detik)
        self._cooldowns = {k: v for k, v in self._cooldowns.items() if now - v < 60}
-
+       
+    
+    async def _defer_interaction(self, interaction: discord.Interaction):
+        try:
+            # Respon instan agar interaksi tidak expired
+            await interaction.response.defer(thinking=True)
+        except discord.errors.HTTPException as e:
+            if e.status == 429:
+                print(f"[AI CHAT] ⚠️ Kena Rate Limit saat defer! Bot sedang sibuk.")
+            else:
+                print(f"[AI CHAT] Error lain saat defer: {e}")
             
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -165,8 +182,18 @@ class AIChat(commands.Cog):
             return {
                 "enabled": data.get("ai_chat_enabled", False),
                 "channel_id": ai_chat.get("channel_id", ""),
-                "personality": ai_chat.get("personality", DEFAULT_PERSONALITY),
-                "temperature": ai_chat.get("temperature", 0.75),
+                "personality": ai_chat.get(
+                    "personality",
+                    DEFAULT_PERSONALITY
+                ),
+                "temperature": ai_chat.get(
+                    "temperature",
+                    0.75
+                ),
+                "dedicated_ai_channel": ai_chat.get(
+                    "dedicated_ai_channel",
+                    False
+                ),
             }
         except Exception as e:
             print(f"[AI CHAT] ⚠️ Error ambil settings: {e}")
@@ -177,6 +204,16 @@ class AIChat(commands.Cog):
         if not allowed_channel:
             return True
         return str(channel_id) == str(allowed_channel)
+    
+    def _is_dedicated_ai_channel(
+        self,
+        settings: dict,
+        channel_id: str
+    ) -> bool:
+        return (
+            settings.get("dedicated_ai_channel", False)
+            and str(settings.get("channel_id", "")) == str(channel_id)
+        )
 
     async def _get_chat_history(self, guild_id: str, user_id: str) -> List[Dict[str, Any]]:
         try:
@@ -241,6 +278,13 @@ class AIChat(commands.Cog):
     # ═══════════════════════════════════════════════════════════════════════
     # TIER 1: Google AI Studio
     # ═══════════════════════════════════════════════════════════════════════
+    
+    @tenacity.retry(
+        wait=tenacity.wait_exponential(min=1, max=2), 
+        stop=tenacity.stop_after_attempt(2),
+        retry=tenacity.retry_if_result(lambda res: res[1] is False), # <--- PAKAI KOMA!
+        retry_error_callback=return_failure_tuple
+    )
 
     async def _call_google_gemini(
         self, user_message: str, history: List[Dict], system_prompt: str, temperature: float = 0.75
@@ -257,14 +301,14 @@ class AIChat(commands.Cog):
             contents.append({"role": "user", "parts": [{"text": user_message}]})
 
             payload = {
-                "systemInstruction": {"parts": [{"text": system_prompt}]},
-                "contents": contents,
-                "generationConfig": {
-                    "temperature": temperature,
-                    "topP": 0.95,
-                    "maxOutputTokens": 1024,
-                },
-            }
+            "system_instruction": {"parts": [{"text": system_prompt}]},
+            "contents": contents,
+            "generationConfig": {
+                "temperature": temperature,
+                "topP": 0.95,
+                "maxOutputTokens": 1024,
+            },
+        }
 
             url = f"{GOOGLE_API_BASE}/models/{GOOGLE_MODEL}:generateContent?key={self.google_api_key}"
 
@@ -302,6 +346,13 @@ class AIChat(commands.Cog):
     # TIER 2: Groq (Llama 3.3 70B)
     # ═══════════════════════════════════════════════════════════════════════
 
+    @tenacity.retry(
+        wait=tenacity.wait_exponential(min=1, max=2), 
+        stop=tenacity.stop_after_attempt(2),
+        retry=tenacity.retry_if_result(lambda res: res[1] is False),
+        retry_error_callback=return_failure_tuple 
+    )
+
     async def _call_groq(
         self, user_message: str, history: List[Dict], system_prompt: str, temperature: float = 0.75
     ) -> tuple[str, bool]:
@@ -330,8 +381,6 @@ class AIChat(commands.Cog):
             }
 
             url = f"{GROQ_API_BASE}/chat/completions"
-
-            # Groq LPU sangat cepat — timeout pendek 10s
             groq_timeout = aiohttp.ClientTimeout(total=10, connect=5)
 
             async with self.session.post(url, headers=headers, json=payload, timeout=groq_timeout) as resp:
@@ -371,6 +420,13 @@ class AIChat(commands.Cog):
     # TIER 3: OpenRouter
     # ═══════════════════════════════════════════════════════════════════════
 
+    @tenacity.retry(
+        wait=tenacity.wait_exponential(min=1, max=2), 
+        stop=tenacity.stop_after_attempt(2),
+        retry=tenacity.retry_if_result(lambda res: res[1] is False),
+        retry_error_callback=return_failure_tuple
+    )
+
     async def _call_openrouter(
         self, user_message: str, history: List[Dict], system_prompt: str, temperature: float = 0.75
     ) -> tuple[str, bool]:
@@ -396,7 +452,7 @@ class AIChat(commands.Cog):
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.openrouter_api_key}",
-                "HTTP-Referer": "https://my-discord-bot-gdew.onrender.com",
+                "HTTP-Referer": "https://my-discord-bot-my-discord-bot.up.railway.app/dashboard/1290376615439892591/ai-chat",
                 "X-Title": "Hidden Hamlet Discord Bot",
             }
 
@@ -426,7 +482,7 @@ class AIChat(commands.Cog):
         except Exception as e:
             print(f"[AI CHAT] ❌ OpenRouter Exception: {type(e).__name__}")
             return "EXCEPTION", False
-
+        
     # ═══════════════════════════════════════════════════════════════════════
     # MASTER FALLBACK ENGINE (Triple Tier)
     # ═══════════════════════════════════════════════════════════════════════
@@ -546,19 +602,47 @@ class AIChat(commands.Cog):
         guild_id = str(guild.id)
         user_id = str(user.id)
 
-        # ── [GUARD] Spam Detection — dijalankan paling awal, sebelum apa pun ──
-        # Mencegah AI dipanggil sama sekali untuk pesan spam/scam/iklan ilegal.
-        is_spam = await self.analyze_spam(user_message)
-        if is_spam:
-            print(f"[AI MOD] 🚫 Pesan spam terdeteksi dari user {user_id} (guild {guild_id})")
-            warning_text = (
-                "🚫 Pesan kamu terdeteksi sebagai **spam/scam/iklan ilegal** dan "
-                "tidak diproses oleh AI. Mohon gunakan fitur AI Chat dengan semestinya, ya!"
-            )
-            await self._send_response(ctx, user_id, warning_text)
+        # ── [NEW] REVISI: Gatekeeper (Local Check) ──
+        # Kita buat objek tiruan (Mock) agar SpamEngine bisa membaca data pesan
+        class MockMsg:
+            def __init__(self, content, author, guild):
+                self.content = content
+                self.author = author
+                self.guild = guild
+                self.mention_everyone = False 
+        
+        mock_msg = MockMsg(user_message, user, guild)
+
+        # 1. Cek Heuristic (Keyword & Link) - LAPIS 1
+        if self.engine.is_spam_heuristic(mock_msg):
+            print(f"[AI MOD] 🚫 Spam terdeteksi via Heuristic dari user {user_id}")
+            await self._send_response(ctx, user_id, "🚫 Pesan diblokir karena terdeteksi spam/link mencurigakan.")
             return
 
+        # 2. Cek Akun Baru (Anti-Spammer Baru) - LAPIS 2
+        if self.engine.is_new_account(mock_msg):
+            print(f"[AI MOD] 🚫 User baru ({user_id}) diblokir.")
+            await self._send_response(ctx, user_id, "🚫 Akun kamu terlalu baru untuk menggunakan fitur AI Chat.")
+            return
+
+        # ======================================================================
+        # 🚨 [UPDATE OPTIMASI] DI-COMMENT BIAR GAK DOUBLE API CALL
+        # Karena filter spam AI sudah di-handle terpusat di moderation.py
+        # ======================================================================
+        # # 3. Guard AI Detection - LAPIS 3 (Hanya jika lolos Lapis 1 & 2)
+        # is_spam = await self.analyze_spam(user_message)
+        # if is_spam:
+        #     print(f"[AI MOD] 🚫 Pesan spam terdeteksi dari user {user_id} (guild {guild_id})")
+        #     warning_text = (
+        #         "🚫 Pesan kamu terdeteksi sebagai **spam/scam/iklan ilegal** dan "
+        #         "tidak diproses oleh AI. Mohon gunakan fitur AI Chat dengan semestinya, ya!"
+        #     )
+        #     await self._send_response(ctx, user_id, warning_text)
+        #     return
+        # ======================================================================
+
         settings = await self._get_guild_ai_settings(guild_id)
+
         if not settings.get("enabled", False):
             await self._send_response(
                 ctx, user_id, "⚠️ AI Chat sedang dimatikan oleh admin server. Hubungi admin untuk mengaktifkannya."
@@ -574,14 +658,31 @@ class AIChat(commands.Cog):
             channel_id = str(ctx.channel.id)
             typing_ctx = ctx.channel
 
-        if not self._is_channel_allowed(settings, channel_id):
-            await self._send_response(
-                ctx, user_id, "⚠️ AI Chat hanya bisa digunakan di channel yang sudah diatur oleh admin."
-            )
-            return
+        # ── REVISI: Tambahkan tanda # pada 4 baris di bawah ini untuk mematikan fiturnya ──
+        # if not self._is_channel_allowed(settings, channel_id):
+        #     await self._send_response(
+        #         ctx, user_id, "⚠️ AI Chat hanya bisa digunakan di channel yang sudah diatur oleh admin."
+        #     )
+        #     return
 
-        personality = settings.get("personality", DEFAULT_PERSONALITY)
-        temperature = settings.get("temperature", 0.75)
+        personality = settings.get(
+            "personality",
+            DEFAULT_PERSONALITY
+        )
+
+        intent = detect_intent(user_message)
+
+        print(
+            f"[AI ROUTER] "
+            f"guild={guild_id} "
+            f"user={user_id} "
+            f"intent={intent.value}"
+        )
+
+        temperature = settings.get(
+            "temperature",
+            0.75
+        )
         history = await self._get_chat_history(guild_id, user_id)
         server_ctx = self._build_server_context(guild)
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(personality=personality, server_context=server_ctx)
@@ -595,34 +696,44 @@ class AIChat(commands.Cog):
         # sendiri gagal (misal izin channel), error akan ditangani oleh
         # try-except di level pemanggil (/ask atau on_message).
         async with typing_ctx.typing():
-            response_text = await self._call_ai(user_message, history, system_prompt, temperature)
+            response_text = await self._call_ai(
+                user_message,
+                history,
+                system_prompt,
+                temperature
+            )
 
         await self._save_chat_history(guild_id, user_id, user_message, response_text, personality)
         await self._send_response(ctx, user_id, response_text)
 
-    # ═══════════════════════════════════════════════════════════════════════
-    # SLASH COMMAND: /ask
-    # ═══════════════════════════════════════════════════════════════════════
     @app_commands.command(name="ask", description="Tanya apa saja ke AI Hidden Hamlet")
     @app_commands.describe(pertanyaan="Apa yang mau ditanyakan?")
     async def ask(self, interaction: discord.Interaction, pertanyaan: str):
         
+        # 1. Setup Data
         guild_id = str(interaction.guild_id)
         user_id = str(interaction.user.id)
         now = datetime.now(timezone.utc).timestamp()
 
-        # DEFER FIRST — sebelum cooldown check!
-        await interaction.response.defer(thinking=False)
-
+        # 2. Cooldown Check
         key = (guild_id, user_id)
         last_used = self._cooldowns.get(key, 0)
         if now - last_used < COOLDOWN_SECONDS:
             retry_after = COOLDOWN_SECONDS - (now - last_used)
-            await interaction.followup.send(f"⏳ Sabar bro! Tunggu **{retry_after:.1f} detik** lagi.")
+            await interaction.response.send_message(
+                f"⏳ Sabar bro! Tunggu **{retry_after:.1f} detik** lagi.", 
+                ephemeral=True
+            )
             return
 
+        # 3. Fast Defer (Panggil helper yang sudah kita buat)
+        # Fungsi ini akan menangani defer dan error handling 429 secara terpusat
+        await self._defer_interaction(interaction)
+
+        # 4. Set Cooldown Setelah Lolos Defer
         self._cooldowns[key] = now
 
+        # 5. Proses AI Chat
         try:
             await self._process_ai_chat(
                 ctx=interaction,
@@ -632,10 +743,11 @@ class AIChat(commands.Cog):
             )
         except Exception as e:
             print(f"[AI CHAT] ❌ Fatal error di /ask: {e}")
-            try:
+            # Karena sudah di-defer, kita pakai followup untuk kirim pesan error
+            try:    
                 await interaction.followup.send("❌ Terjadi error internal. Coba lagi nanti ya!")
-            except Exception:
-                pass
+            except Exception as e_followup:
+                print(f"[AI CHAT] ❌ Gagal kirim error message: {e_followup}")
 
     # ═══════════════════════════════════════════════════════════════════════
     # EVENT LISTENER: Mention @HiddenHamlet
@@ -650,15 +762,38 @@ class AIChat(commands.Cog):
 
         # 2. Check Mention
         # Cara paling aman cek mention adalah dengan memeriksa list 'mentions'
-        if self.bot.user not in message.mentions:
+        settings = await self._get_guild_ai_settings(
+            str(message.guild.id)
+        )
+
+        # Hitung ulang untuk debug
+        is_mentioned = self.bot.user in message.mentions
+
+        is_dedicated_channel = self._is_dedicated_ai_channel(
+            settings,
+            str(message.channel.id)
+        )
+
+        # print("========== AI DEBUG ==========")
+        # print(settings)
+        # print(f"channel_id={message.channel.id}")
+        # print(f"mentioned={is_mentioned}")
+        # print(f"dedicated={is_dedicated_channel}")
+        # print("==============================")
+
+        # print("========== AI DEBUG ==========")
+        # print(settings)
+        # print(f"channel={message.channel.id}")
+        # print("==============================")
+
+        if not is_mentioned and not is_dedicated_channel:
             return
 
-        settings = await self._get_guild_ai_settings(str(message.guild.id))
         if not settings.get("enabled", False):
             return
 
-        if not self._is_channel_allowed(settings, str(message.channel.id)):
-            return
+        # if not self._is_channel_allowed(settings, str(message.channel.id)):
+        #     return
 
         # 3. Clean content
         # Pakai regex yang match persis format mention Discord (<@id> atau <@!id>)
@@ -667,7 +802,13 @@ class AIChat(commands.Cog):
         # bot punya nama tampilan yang juga muncul sebagai substring di teks user.
         if self._mention_pattern is None:
             self._mention_pattern = re.compile(rf"<@!?{self.bot.user.id}>")
-        content = self._mention_pattern.sub("", message.content).strip()
+        if is_mentioned:
+            content = self._mention_pattern.sub(
+                "",
+                message.content
+            ).strip()
+        else:
+            content = message.content.strip()
 
         if not content:
             await message.reply("Halo! Ada yang bisa kubantu? 🤖", mention_author=False)

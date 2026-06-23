@@ -1,10 +1,12 @@
-
 import os
 import threading
 import base64
 import traceback
 import io
-from flask import Flask, render_template, jsonify, request, redirect
+import asyncio
+from flask import Flask, render_template, jsonify, request, redirect, session, url_for
+import requests
+from functools import wraps
 from datetime import datetime, timezone
 from PIL import Image
 
@@ -13,6 +15,7 @@ from PIL import Image
 # ==========================================================
 from utils.formatters import format_duration, format_uptime
 from backend.cogs.database.firebase_setup import db
+from flask_session import Session
 
 # ==========================================================
 # Flask app — static & template folder ke frontend/
@@ -26,6 +29,92 @@ app = Flask(
 )
 
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
+
+# Setelah app.secret_key
+app.config["SESSION_TYPE"] = "filesystem"
+Session(app)
+
+
+# ==========================================================
+# Discord OAuth2 Login
+# ==========================================================
+
+DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "1505849571039907900")
+DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
+DISCORD_REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI")
+if not DISCORD_REDIRECT_URI:
+    raise ValueError("DISCORD_REDIRECT_URI environment variable is required")
+DISCORD_API_BASE = "https://discord.com/api"
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "user" not in session:
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route("/login")
+def login():
+    discord_login_url = (
+        f"https://discord.com/oauth2/authorize?"
+        f"client_id={DISCORD_CLIENT_ID}&"
+        f"redirect_uri={DISCORD_REDIRECT_URI}&"
+        f"response_type=code&"
+        f"scope=identify%20guilds"
+    )
+    return redirect(discord_login_url)
+
+@app.route("/callback")
+def callback():
+    code = request.args.get("code")
+    if not code:
+        return redirect("/")
+    
+    data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": DISCORD_REDIRECT_URI,
+        "client_id": DISCORD_CLIENT_ID,
+        "client_secret": DISCORD_CLIENT_SECRET,
+    }
+    
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    response = requests.post(
+        f"{DISCORD_API_BASE}/oauth2/token",
+        data=data,
+        headers=headers
+    )
+    
+    token_data = response.json()
+    access_token = token_data.get("access_token")
+    
+    if not access_token:
+        return redirect("/")
+    
+    # Ambil data user
+    user_response = requests.get(
+        f"{DISCORD_API_BASE}/users/@me",
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+    
+    user = user_response.json()
+    
+    # Simpan ke session
+    session["user"] = {
+        "id": user.get("id"),
+        "username": user.get("username"),
+        "avatar": user.get("avatar"),
+        "discriminator": user.get("discriminator")
+    }
+    
+    return redirect("/dashboard")
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/")
 
 # ==========================================================
 # Shared stats (thread-safe)
@@ -98,7 +187,7 @@ def get_guild_channels(guild_id: str) -> list:
     with _guild_lock:
         return _guild_channels.get(guild_id, [])
     
-    # ==========================================================
+# ==========================================================
 # Shared music state (thread-safe)
 # ==========================================================
 _music_lock = threading.Lock()
@@ -111,6 +200,166 @@ def set_music_state(guild_id: str, state: dict):
 def get_music_state(guild_id: str) -> dict:
     with _music_lock:
         return _music_states.get(guild_id, {"connected": False})
+    
+# ==========================================================
+# Shared bot instance
+# ==========================================================
+_bot_instance = None
+
+def set_bot_instance(bot):
+    global _bot_instance
+    _bot_instance = bot
+
+def get_bot_instance():
+    return _bot_instance
+    
+
+# ==========================================================
+# API — Music
+# ==========================================================
+
+@app.route("/api/music/status")
+def api_music_status():
+    guild_id = request.args.get("guild_id")
+
+    if not guild_id:
+        return jsonify({"connected": False}), 400
+
+    return jsonify(get_music_state(guild_id))
+
+
+@app.route("/api/music/channels")
+def api_music_channels():
+    guild_id = request.args.get("guild_id")
+
+    if not guild_id:
+        return jsonify({"channels": []}), 400
+
+    return jsonify({
+        "channels": get_guild_channels(guild_id)
+    })
+
+
+@app.route("/api/music/queue", methods=["GET"])
+def api_music_queue():
+    guild_id = request.args.get("guild_id")
+
+    if not guild_id:
+        return jsonify({
+            "success": False,
+            "message": "guild_id required"
+        }), 400
+
+    state = get_music_state(guild_id)
+
+    return jsonify({
+        "success": True,
+        "queue": state.get("queue", []),
+        "queue_count": state.get("queue_count", 0),
+        "queue_duration": state.get("queue_duration", 0)
+    })
+
+
+@app.route("/api/music/queue", methods=["POST"])
+def api_music_queue_action():
+    data = request.get_json() or {}
+
+    return jsonify({
+        "success": True,
+        "message": f"Action {data.get('action')} received"
+    })
+
+
+@app.route("/api/music/control", methods=["POST"])
+def api_music_control():
+    data = request.get_json() or {}
+
+    guild_id = data.get("guild_id")
+    action = data.get("action")
+
+    if not guild_id:
+        return jsonify({
+            "success": False,
+            "message": "guild_id required"
+        }), 400
+
+    bot = get_bot_instance()
+
+    if not bot:
+        return jsonify({
+            "success": False,
+            "message": "Bot unavailable"
+        }), 500
+
+    guild = bot.get_guild(int(guild_id))
+
+    if not guild:
+        return jsonify({
+            "success": False,
+            "message": "Guild not found"
+        }), 404
+
+    player = guild.voice_client
+
+    if not player:
+        return jsonify({
+            "success": False,
+            "message": "Player not connected"
+        }), 404
+
+    try:
+
+        if action == "pause":
+            asyncio.run_coroutine_threadsafe(
+                player.pause(True),
+                bot.loop
+            )
+
+        elif action == "play":
+            asyncio.run_coroutine_threadsafe(
+                player.pause(False),
+                bot.loop
+            )
+
+        elif action == "skip":
+            asyncio.run_coroutine_threadsafe(
+                player.stop(),
+                bot.loop
+            )
+
+        elif action == "stop":
+            asyncio.run_coroutine_threadsafe(
+                player.stop(),
+                bot.loop
+            )
+
+        elif action == "disconnect":
+            asyncio.run_coroutine_threadsafe(
+                player.disconnect(),
+                bot.loop
+            )
+
+        elif action == "volume":
+            volume = int(data.get("volume", 100))
+
+            asyncio.run_coroutine_threadsafe(
+                player.set_volume(volume),
+                bot.loop
+            )
+
+        return jsonify({
+            "success": True,
+            "action": action
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+    
 
 # ==========================================================
 # Helper — baca config welcome dari Firestore
@@ -215,11 +464,8 @@ def _render_page(template_name: str, active_page: str, guild_id: str, **kwargs):
 # ==========================================================
 @app.route("/")
 def home():
-    return (
-        "<h1>🤖 Bot is running!</h1>"
-        '<p><a href="/dashboard">Open Dashboard</a> • '
-        '<a href="/api/stats">API JSON</a></p>'
-    )
+    # Ini bakal ngebuka file landing.html yang ada di folder templates lu
+    return render_template("landing.html")
 
 @app.route("/api/stats")
 def api_stats():
@@ -250,17 +496,19 @@ def settings_page(guild_id: str):
 # ==========================================================
 # ROUTES — Music (placeholder)
 # ==========================================================
-@app.route("/dashboard/<guild_id>/music")
-def music_settings(guild_id: str):
-    return _render_page("music_settings.html", active_page="music", guild_id=guild_id)
+
+@app.route("/dashboard/<guild_id>/music/now-playing")
+def music_now_playing(guild_id: str):
+    return _render_page("now_playing.html", active_page="now_playing", guild_id=guild_id)
+
 
 @app.route("/dashboard/<guild_id>/music/queue")
 def music_queue(guild_id: str):
-    return _render_page("music_settings.html", active_page="queue", guild_id=guild_id)
+    return _render_page("queue.html", active_page="queue", guild_id=guild_id)
 
 @app.route("/dashboard/<guild_id>/music/playlists")
 def music_playlists(guild_id: str):
-    return _render_page("music_settings.html", active_page="playlists", guild_id=guild_id)
+    return _render_page("playlist.html", active_page="playlists", guild_id=guild_id)
 
 # ==========================================================
 # ROUTES — Welcome / Announcements
@@ -368,17 +616,22 @@ def ai_chat_page(guild_id: str):
 def ai_chat_toggle(guild_id):
     try:
         if request.is_json:
-            data = request.get_json()
+            # FIX: Ditambahkan 'or {}' agar jika JSON kosong, tidak menyebabkan NoneType Error
+            data = request.get_json() or {}
             enabled = data.get("enabled", False)
         else:
             enabled = request.form.get("enabled", "false").lower() == "true"
 
+        # Cek apakah database Firebase siap digunakan
         if db is None:
-            return jsonify({"success": False, "message": "Firebase tidak tersedia."}), 500
+            print(f"[AI-CHAT-TOGGLE] ❌ Server melempar 500 karena 'db' bernilai None untuk Guild ID: {guild_id}")
+            return jsonify({"success": False, "message": "Firebase tidak tersedia (db is None)."}), 500
 
+        # Simpan ke Firestore
         doc_ref = db.collection("guild_settings").document(str(guild_id))
         doc_ref.set({"ai_chat_enabled": enabled}, merge=True)
 
+        print(f"[AI-CHAT-TOGGLE] ✅ Guild {guild_id} berhasil mengubah status menjadi: {enabled}")
         return jsonify({
             "success": True,
             "enabled": enabled,
@@ -386,8 +639,10 @@ def ai_chat_toggle(guild_id):
         }), 200
 
     except Exception as e:
+        # Mencetak struktur eror lengkap di console terminal / log Render kamu
+        print("🚨 [AI-CHAT-TOGGLE EROR] Terjadi masalah di dalam blok try-except:")
         traceback.print_exc()
-        return jsonify({"success": False, "message": f"Terjadi error: {str(e)}"}), 500
+        return jsonify({"success": False, "message": f"Terjadi error internal: {str(e)}"}), 500
 
 
 @app.route("/dashboard/<guild_id>/ai-chat/save", methods=["POST"])
@@ -411,12 +666,15 @@ def ai_chat_save(guild_id):
             return jsonify({"success": False, "message": "Firebase tidak tersedia."}), 500
 
         doc_ref = db.collection("guild_settings").document(str(guild_id))
+        
+        # IMPLEMENTASI: Menambahkan dedicated_ai_channel secara dinamis ke Firestore
         doc_ref.set({
             "ai_chat": {
                 "personality": personality,
                 "channel_id": channel_id,
                 "model": model,
                 "temperature": temperature,
+                "dedicated_ai_channel": True if channel_id else False, # True jika channel dipilih, False jika 'Semua Channel'
                 "updated_at": datetime.now(timezone.utc),
             }
         }, merge=True)
@@ -516,6 +774,20 @@ def api_ai_chat_history(guild_id):
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "message": str(e)}), 500
+
+# ==========================================================
+# API Endpoint untuk Landing Page Stats
+# ==========================================================
+
+@app.route('/api/stats', methods=['GET'])
+def get_stats():
+    # Pake lock biar datanya aman pas lagi di-update sama bot
+    with _stats_lock:
+        stats_data = {
+            "guilds": _bot_stats.get("guilds", 0),
+            "members": _bot_stats.get("members", 0)
+        }
+    return jsonify(stats_data), 200
 
 
 # ==========================================================

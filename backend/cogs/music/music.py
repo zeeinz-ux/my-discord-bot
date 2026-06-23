@@ -21,8 +21,10 @@ def get_db():
         print(f"[FIREBASE LAZY IMPORT] {e}")
         return None
 
-class MusicService:
-    def __init__(self):
+class Music(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.players = {}
         self._spotify_enabled = True
         self.spotify = SpotifyResolver(
             fallback_client_id=os.getenv("SPOTIFY_CLIENT_ID"),
@@ -30,6 +32,11 @@ class MusicService:
         )
         print("[SPOTIFY] SpotifyDown API resolver aktif (fallback: Official API)")
         print(f"[DEBUG SPOTIFY] Client ID Terdeteksi: {os.getenv('SPOTIFY_CLIENT_ID')[:5]}***" if os.getenv('SPOTIFY_CLIENT_ID') else "[DEBUG SPOTIFY] Client ID TIDAK DITEMUKAN!")
+
+    def get_player(self, guild_id: int) -> MusicPlayer:
+        if guild_id not in self.players:
+            self.players[guild_id] = MusicPlayer(guild_id)
+        return self.players[guild_id]
 
     # ==========================================================
     # SPOTIFY URL HELPERS
@@ -118,255 +125,6 @@ class MusicService:
         tasks = [search_and_queue(i, t) for i, t in enumerate(tracks)]
         await asyncio.gather(*tasks, return_exceptions=True)
         return added, [p for p in playables if p is not None]
-
-    async def resolve_spotify_track(self, search_query: str, interaction: discord.Interaction) -> wavelink.Playable | None:
-        """Resolve Spotify track to wavelink playable."""
-        spotify_info = self._extract_spotify_id(search_query)
-        if not spotify_info:
-            await interaction.followup.send("❌ URL Spotify tidak valid.")
-            return None
-        spotify_type, spotify_id = spotify_info
-        print(f"[SPOTIFY] Detected {spotify_type} with ID: {spotify_id}")
-
-        loading_msg = await interaction.followup.send(
-            f"🎵 Mengambil metadata Spotify ({spotify_type}) via SpotifyDown API..."
-        )
-
-        async with aiohttp.ClientSession() as session:
-            resolved_tracks, source = await self.spotify.resolve(search_query, session)
-
-        if not resolved_tracks:
-            await loading_msg.edit(
-                content=(
-                    "❌ Gagal mengambil metadata dari Spotify.\n"
-                    "SpotifyDown API sedang down dan fallback ke Spotify Official juga gagal.\n"
-                    "Coba lagi nanti atau gunakan URL YouTube langsung."
-                )
-            )
-            return None
-
-        source_emoji = {
-            "spotifydown": "🟢",
-            "spotify_official": "🟡",
-            "ytsearch": "🟠",
-        }.get(source, "⚪")
-
-        if spotify_type == "track":
-            rt = resolved_tracks[0]
-            print(f"[SPOTIFY TRACK] Resolved via {source} | Query: {rt.query}")
-
-            clean_query = rt.query
-            for prefix in ["ytsearch:", "ytmsearch:", "scsearch:", "spsearch:"]:
-                if clean_query.lower().startswith(prefix):
-                    clean_query = clean_query[len(prefix):].strip()
-
-            try:
-                tracks = await wavelink.Playable.search(clean_query, source=wavelink.TrackSource.YouTubeMusic)
-            except Exception as e:
-                print(f"[SPOTIFY TRACK ERROR] {e}")
-                await loading_msg.edit(content=f"❌ Gagal mencari lagu di YouTube.\n`{e}`")
-                return None
-
-            if not tracks:
-                await loading_msg.edit(content="❌ Lagu tidak ditemukan di YouTube.")
-                return None
-
-            track = tracks[0]
-            return track, source_emoji, rt, loading_msg
-
-        return None, None, None, loading_msg
-
-    async def resolve_spotify_playlist(self, search_query: str, interaction: discord.Interaction, player: wavelink.Player, loading_msg) -> tuple[list[wavelink.Playable], str, ResolvedTrack, discord.Embed]:
-        """Resolve Spotify playlist to wavelink playables."""
-        spotify_info = self._extract_spotify_id(search_query)
-        if not spotify_info:
-            await interaction.followup.send("❌ URL Spotify tidak valid.")
-            return None, None, None, None
-        spotify_type, spotify_id = spotify_info
-        print(f"[SPOTIFY {spotify_type.upper()}] Resolving playlist...")
-
-        async with aiohttp.ClientSession() as session:
-            resolved_tracks, source = await self.spotify.resolve(search_query, session)
-
-        if not resolved_tracks:
-            await loading_msg.edit(
-                content=(
-                    "❌ Gagal mengambil metadata dari Spotify.\n"
-                    "SpotifyDown API sedang down dan fallback ke Spotify Official juga gagal.\n"
-                    "Coba lagi nanti atau gunakan URL YouTube langsung."
-                )
-            )
-            return None, None, None, None
-
-        source_emoji = {
-            "spotifydown": "🟢",
-            "spotify_official": "🟡",
-            "ytsearch": "🟠",
-        }.get(source, "⚪")
-
-        total_tracks = len(resolved_tracks)
-        print(f"[SPOTIFY {spotify_type.upper()}] {total_tracks} tracks resolved via {source}")
-
-        total_ms = sum(t.duration_ms or 0 for t in resolved_tracks)
-        total_duration = format_duration(total_ms) if total_ms > 0 else "Unknown"
-
-        thumbnail = None
-        for t in resolved_tracks:
-            if t.artwork:
-                thumbnail = t.artwork
-                break
-
-        first_track = None
-        first_track_index = 0
-        for i, rt in enumerate(resolved_tracks):
-            first_track = await self._search_single_resolved(rt)
-            if first_track:
-                first_track_index = i
-                break
-
-        if not first_track:
-            await loading_msg.edit(content="❌ Gagal menemukan satupun lagu dari playlist ini di YouTube.")
-            return None, None, None, None
-
-        remaining_resolved = resolved_tracks[first_track_index + 1:]
-
-        if not player.current:
-            await player.set_volume(100)
-            await asyncio.sleep(0.3)
-            await player.play(first_track)
-        else:
-            await player.queue.put_wait(first_track)
-
-        async def bg_playlist_loader(player_obj, tracks_to_load):
-            for rt_track in tracks_to_load:
-                await asyncio.sleep(0.5)
-                playable = await self._search_single_resolved(rt_track)
-                if playable:
-                    await player_obj.queue.put_wait(playable)
-                    if not player_obj.current and player_obj.queue.count == 1:
-                        try:
-                            await player_obj.play(player_obj.queue.get())
-                        except Exception:
-                            pass
-
-        asyncio.create_task(bg_playlist_loader(player, remaining_resolved))
-
-        playlist_name = resolved_tracks[0].album or f"Spotify {spotify_type.title()}"
-
-        final_embed = discord.Embed(
-            description=f"📁 **{playlist_name}**",
-            color=discord.Color.from_rgb(29, 185, 84)
-        )
-
-        final_embed.set_author(
-            name=f"🎶 Added to Queue ({spotify_type.title()})",
-            icon_url=interaction.user.display_avatar.url
-        )
-
-        final_embed.add_field(
-            name="🔢 Jumlah Lagu",
-            value=f"`{total_tracks} Lagu`",
-            inline=True
-        )
-        final_embed.add_field(
-            name="⏳ Total Durasi",
-            value=f"`{total_duration}`",
-            inline=True
-        )
-        final_embed.add_field(
-            name="👤 Request Oleh",
-            value=interaction.user.mention,
-            inline=True
-        )
-
-        if thumbnail:
-            final_embed.set_thumbnail(url=thumbnail)
-
-        if player.current == first_track:
-            status_text = f"▶️ Sekarang Memutar: {first_track.title[:35]}..."
-        else:
-            status_text = "📥 Dimasukkan ke ujung antrean"
-
-        final_embed.set_footer(
-            text=f"{status_text} | ⚡ Sisa lagu dimuat di background.",
-            icon_url=interaction.guild.me.display_avatar.url
-        )
-
-        return [first_track] + [await self._search_single_resolved(rt) for rt in remaining_resolved if await self._search_single_resolved(rt)], source_emoji, resolved_tracks[0], final_embed
-
-    async def search_and_queue_track(self, search_query: str, player: wavelink.Player) -> wavelink.Playable | None:
-        """Search and queue a track from search query."""
-        prefixes = ["ytsearch:", "ytmsearch:", "scsearch:", "spsearch:"]
-        clean_input = search_query
-        for p in prefixes:
-            if clean_input.lower().startswith(p):
-                clean_input = clean_input[len(p):].strip()
-
-        if not (clean_input.startswith("http://") or clean_input.startswith("https://")):
-            search_query = f"ytsearch:{clean_input}"
-        else:
-            search_query = clean_input
-
-        print(f"[PLAY CMD] Searching Final Query: {search_query}")
-        try:
-            tracks = await asyncio.wait_for(wavelink.Playable.search(search_query), timeout=30.0)
-        except Exception as e:
-            print(f"[PLAY CMD] SEARCH ERROR: {type(e).__name__}: {e}")
-            return None
-
-        if not tracks:
-            print("[PLAY CMD] No tracks found")
-            return None
-
-        if isinstance(tracks, wavelink.Playlist):
-            print(f"[PLAY CMD] Playlist detected: {tracks.name} with {len(tracks.tracks)} tracks")
-            added = 0
-            for t in tracks.tracks:
-                try:
-                    await player.queue.put_wait(t)
-                    added += 1
-                except Exception as e:
-                    print(f"[PLAY CMD] Queue put error: {e}")
-                    break
-            print(f"[PLAY CMD] Added {added} tracks to queue")
-            if not player.current and not player.queue.is_empty:
-                try:
-                    first = player.queue.get()
-                    print(f"[PLAY CMD] Starting playback with: {first.title}")
-                    await player.set_volume(100)
-                    await asyncio.sleep(0.3)
-                    await player.play(first)
-                except Exception as e:
-                    print(f"[PLAY CMD] Play error: {e}")
-            return tracks
-
-        track = tracks[0] if hasattr(tracks, '__getitem__') else tracks
-        print(f"[PLAY CMD] Single track: {track.title}")
-        try:
-            await player.queue.put_wait(track)
-            print("[PLAY CMD] Track queued")
-        except Exception as e:
-            print(f"[PLAY CMD] Queue error: {e}")
-            return None
-
-        if not player.current:
-            try:
-                next_track = player.queue.get()
-                print(f"[PLAY CMD] Starting playback: {next_track.title}")
-                await player.set_volume(100)
-                await asyncio.sleep(0.5)
-                await player.play(next_track)
-            except Exception as e:
-                print(f"[PLAY CMD] Play error: {e}")
-                return None
-
-        return track
-
-class Music(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.players = {}
-        self.music_service = MusicService()
 
     # ==========================================================
     # [POLISH] HELPERS
@@ -559,12 +317,13 @@ class Music(commands.Cog):
                 return
         print(f"[PLAY CMD] Player ready. Current: {player.current}")
         search_query = query.strip()
+        tracks = None
 
         # ==========================================================
         # HANDLE SPOTIFY URL — SPOTIFYDOWN API INTEGRATION
         # ==========================================================
-        if self.music_service._is_spotify_url(search_query):
-            spotify_info = self.music_service._extract_spotify_id(search_query)
+        if self._is_spotify_url(search_query):
+            spotify_info = self._extract_spotify_id(search_query)
             if not spotify_info:
                 await interaction.followup.send("❌ URL Spotify tidak valid.")
                 return
@@ -575,12 +334,53 @@ class Music(commands.Cog):
                 f"🎵 Mengambil metadata Spotify ({spotify_type}) via SpotifyDown API..."
             )
 
-            if spotify_type == "track":
-                result = await self.music_service.resolve_spotify_track(search_query, interaction)
-                if not result:
-                    return
-                track, source_emoji, rt, loading_msg = result
+            async with aiohttp.ClientSession() as session:
+                resolved_tracks, source = await self.spotify.resolve(search_query, session)
 
+            if not resolved_tracks:
+                await loading_msg.edit(
+                    content=(
+                        "❌ Gagal mengambil metadata dari Spotify.\n"
+                        "SpotifyDown API sedang down dan fallback ke Spotify Official juga gagal.\n"
+                        "Coba lagi nanti atau gunakan URL YouTube langsung."
+                    )
+                )
+                return
+
+            # Info source ke user
+            source_emoji = {
+                "spotifydown": "🟢",
+                "spotify_official": "🟡",
+                "ytsearch": "🟠",
+            }.get(source, "⚪")
+
+            # ==========================================================
+            # SINGLE TRACK
+            # ==========================================================
+            if spotify_type == "track":
+                rt = resolved_tracks[0]
+                print(f"[SPOTIFY TRACK] Resolved via {source} | Query: {rt.query}")
+
+                # 🛠️ ANTI-DOUBLE PREFIX JUGA DI SINI UNTUK LAGU SATUAN
+                # 🛠️ ANTI-DOUBLE PREFIX JUGA DI SINI UNTUK LAGU SATUAN
+                clean_query = rt.query
+                for prefix in ["ytsearch:", "ytmsearch:", "scsearch:", "spsearch:"]:
+                    if clean_query.lower().startswith(prefix):
+                        clean_query = clean_query[len(prefix):].strip()
+
+                try:
+                    # Samakan source-nya ke YouTubeMusic biar makin akurat
+                    tracks = await wavelink.Playable.search(clean_query, source=wavelink.TrackSource.YouTubeMusic)
+                except Exception as e:
+                    print(f"[SPOTIFY TRACK ERROR] {e}")
+                    await loading_msg.edit(content=f"❌ Gagal mencari lagu di YouTube.\n`{e}`")
+                    return
+
+                if not tracks:
+                    await loading_msg.edit(content="❌ Lagu tidak ditemukan di YouTube.")
+                    return
+
+                track = tracks[0]
                 await player.queue.put_wait(track)
                 if not player.current:
                     await player.set_volume(100)
@@ -595,51 +395,167 @@ class Music(commands.Cog):
                 artwork = rt.artwork or track.artwork
                 if artwork:
                     embed.set_thumbnail(url=artwork)
-                embed.set_footer(text=f"Source: spotifydown | Spotify ID: {rt.spotify_id}")
+                embed.set_footer(text=f"Source: {source} | Spotify ID: {rt.spotify_id}")
 
                 await loading_msg.edit(content=None, embed=embed)
                 return
 
-            elif spotify_type in ["playlist", "album"]:
-                result = await self.music_service.resolve_spotify_playlist(search_query, interaction, player, loading_msg)
-                if not result:
+            # ==========================================================
+            # PLAYLIST / ALBUM — VERSI LAZY LOADING (SUPER CEPAT ⚡)
+            # ==========================================================
+            else:
+                total_tracks = len(resolved_tracks)
+                print(f"[SPOTIFY {spotify_type.upper()}] {total_tracks} tracks resolved via {source}")
+
+                # Hitung total durasi playlist
+                total_ms = sum(t.duration_ms or 0 for t in resolved_tracks)
+                total_duration = format_duration(total_ms) if total_ms > 0 else "Unknown"
+
+                # Ambil thumbnail dari track pertama atau fallback
+                thumbnail = None
+                for t in resolved_tracks:
+                    if t.artwork:
+                        thumbnail = t.artwork
+                        break
+
+                # 1. AMBIL LAGU PERTAMA SECARA INSTAN AGAR BOT LANGSUNG BUNYI 🎵
+                first_track = None
+                first_track_index = 0
+                for i, rt in enumerate(resolved_tracks):
+                    first_track = await self._search_single_resolved(rt)
+                    if first_track:
+                        first_track_index = i
+                        break
+
+                if not first_track:
+                    await loading_msg.edit(content="❌ Gagal menemukan satupun lagu dari playlist ini di YouTube.")
                     return
-                tracks, source_emoji, first_rt, final_embed = result
+
+                # Sisa lagu yang akan kita muat di dalam background worker
+                remaining_resolved = resolved_tracks[first_track_index + 1:]
+
+                # 2. langsung mainkan / antrekan lagu pertama saat ini juga
+                if not player.current:
+                    await player.set_volume(100)
+                    await asyncio.sleep(0.3)
+                    await player.play(first_track)
+                else:
+                    await player.queue.put_wait(first_track)
+
+                # 3. LAZY LOADING WORKER: Isi sisa antrean di background tanpa memblokir Discord ⚡
+                async def bg_playlist_loader(player_obj, tracks_to_load):
+                    for rt_track in tracks_to_load:
+                        await asyncio.sleep(0.5)  # Jeda aman 0.5 detik biar ga kena rate-limit/ban oleh YouTube
+                        playable = await self._search_single_resolved(rt_track)
+                        if playable:
+                            await player_obj.queue.put_wait(playable)
+                            
+                            # Jaga-jaga jika player mendadak kosong/idle pas background lagi loading
+                            if not player_obj.current and player_obj.queue.count == 1:
+                                try:
+                                    await player_obj.play(player_obj.queue.get())
+                                except Exception:
+                                    pass
+
+                # Jalankan worker di background thread asyncio
+                asyncio.create_task(bg_playlist_loader(player, remaining_resolved))
+
+                # ==========================================================
+                # 4. TAMPILKAN EMBED RESPONSE PREMIUM (Ala Jockie Music 🎶)
+                # ==========================================================
+                playlist_name = resolved_tracks[0].album or f"Spotify {spotify_type.title()}"
+                
+                # Menggunakan warna hijau resmi Spotify (RGB: 29, 185, 84)
+                final_embed = discord.Embed(
+                    description=f"📁 **{playlist_name}**",
+                    color=discord.Color.from_rgb(29, 185, 84)
+                )
+                
+                # Memasang Author Header biar judul di atas keliatan bersih tanpa gumpalan teks bold
+                final_embed.set_author(
+                    name=f"🎶 Added to Queue ({spotify_type.title()})",
+                    icon_url=interaction.user.display_avatar.url
+                )
+                
+                # Membuat struktur grid 3 kolom yang sejajar menggunakan inline=True
+                final_embed.add_field(
+                    name="🔢 Jumlah Lagu", 
+                    value=f"`{total_tracks} Lagu`", 
+                    inline=True
+                )
+                final_embed.add_field(
+                    name="⏳ Total Durasi", 
+                    value=f"`{total_duration}`", 
+                    inline=True
+                )
+                final_embed.add_field(
+                    name="👤 Request Oleh", 
+                    value=interaction.user.mention, 
+                    inline=True
+                )
+                
+                # Memasang gambar cover album/playlist di sebelah kanan embed
+                if thumbnail:
+                    final_embed.set_thumbnail(url=thumbnail)
+                
+                # Menentukan teks status pemutaran untuk ditaruh di footer bawah
+                if player.current == first_track:
+                    status_text = f"▶️ Sekarang Memutar: {first_track.title[:35]}..."
+                else:
+                    status_text = "📥 Dimasukkan ke ujung antrean"
+                    
+                final_embed.set_footer(
+                    text=f"{status_text} | ⚡ Sisa lagu dimuat di background.",
+                    icon_url=self.bot.user.display_avatar.url
+                )
+
                 await loading_msg.edit(content=None, embed=final_embed)
                 return
-
+            
         # HANDLE URL LANGSUNG (YouTube, SoundCloud, dll)
         elif search_query.startswith("http://") or search_query.startswith("https://"):
             print("[PLAY CMD] Direct URL detected, Lavalink will auto-resolve")
             pass
         # 2. HANDLE SEARCH QUERY & URL LANGSUNG
         else:
-            result = await self.music_service.search_and_queue_track(search_query, player)
-            if not result:
+            prefixes = ["ytsearch:", "ytmsearch:", "scsearch:", "spsearch:"]
+            clean_input = search_query
+            for p in prefixes:
+                if clean_input.lower().startswith(p):
+                    clean_input = clean_input[len(p):].strip()
+            
+            # Sekarang cuma kasih prefix ytsearch: (atau link langsung)
+            if not (clean_input.startswith("http://") or clean_input.startswith("https://")):
+                search_query = f"ytsearch:{clean_input}"
+            else:
+                search_query = clean_input
+
+            print(f"[PLAY CMD] Searching Final Query: {search_query}")
+            try:
+                tracks = await asyncio.wait_for(wavelink.Playable.search(search_query), timeout=30.0)
+            except Exception as e:
+                await interaction.followup.send(f"❌ Gagal mencari lagu: `{e}`")
                 return
-            if isinstance(result, wavelink.Playlist):
-                await interaction.followup.send(f"✅ Playlist ditambahkan! ({len(result.tracks)} lagu)")
-                return
-            track = result
 
         # ==========================================================
         # SEARCH VIA WAVELINK (Non-Spotify flow)
         # ==========================================================
-        print(f"[PLAY CMD] Searching: {search_query}")
-        try:
-            tracks = await asyncio.wait_for(
-                wavelink.Playable.search(search_query),
-                timeout=30.0,
-            )
-            print(f"[PLAY CMD] Search returned: {type(tracks)} | count: {len(tracks) if hasattr(tracks, '__len__') else 'N/A'}")
-        except asyncio.TimeoutError:
-            print("[PLAY CMD] SEARCH TIMEOUT after 30s")
-            await interaction.followup.send("⏱️ Search timeout (30s). Coba lagi atau gunakan query lain.")
-            return
-        except Exception as e:
-            print(f"[PLAY CMD] SEARCH ERROR: {type(e).__name__}: {e}")
-            await interaction.followup.send(f"❌ Gagal mencari lagu: `{e}`")
-            return
+        if tracks is None:
+            print(f"[PLAY CMD] Searching: {search_query}")
+            try:
+                tracks = await asyncio.wait_for(
+                    wavelink.Playable.search(search_query),
+                    timeout=30.0,
+                )
+                print(f"[PLAY CMD] Search returned: {type(tracks)} | count: {len(tracks) if hasattr(tracks, '__len__') else 'N/A'}")
+            except asyncio.TimeoutError:
+                print("[PLAY CMD] SEARCH TIMEOUT after 30s")
+                await interaction.followup.send("⏱️ Search timeout (30s). Coba lagi atau gunakan query lain.")
+                return
+            except Exception as e:
+                print(f"[PLAY CMD] SEARCH ERROR: {type(e).__name__}: {e}")
+                await interaction.followup.send(f"❌ Gagal mencari lagu: `{e}`")
+                return
 
         if not tracks:
             print("[PLAY CMD] No tracks found")
