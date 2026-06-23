@@ -15,6 +15,15 @@ from PIL import Image
 # ==========================================================
 from backend.utils.formatters import format_duration, format_uptime
 from backend.cogs.database.firebase_setup import db
+from backend.utils.firestore_stats import (
+    get_stats_snapshot,
+    set_guild_channels,
+    get_guild_channels,
+    set_music_state,
+    get_music_state,
+    set_bot_instance,
+    get_bot_instance
+)
 from flask_session import Session
 
 # ==========================================================
@@ -108,7 +117,6 @@ def callback():
         "avatar": user.get("avatar"),
         "discriminator": user.get("discriminator")
     }
-    
     return redirect("/dashboard")
 
 @app.route("/logout")
@@ -116,103 +124,6 @@ def logout():
     session.clear()
     return redirect("/")
 
-# ==========================================================
-# Shared stats (thread-safe)
-# ==========================================================
-_stats_lock = threading.Lock()
-_bot_stats = {
-    "online": False,
-    "username": "Hidden Hamlet",
-    "uptime": 0,
-    "guilds": 0,
-    "members": 0,
-    "lavalink_connected": False,
-    "lavalink_node": "N/A",
-    "players": [],
-    "last_updated": "-",
-    "guilds_list": []
-}
-
-def set_stats(**kwargs):
-    with _stats_lock:
-        _bot_stats.update(kwargs)
-        _bot_stats["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-def get_stats_snapshot():
-    with _stats_lock:
-        raw = dict(_bot_stats)
-
-    players = []
-    for p in raw.get("players", []):
-        dur = p.get("duration", 0)
-        pos = p.get("position", 0)
-        pct = (pos / dur * 100) if dur else 0
-        players.append({
-            "guild":            p.get("guild", "Unknown"),
-            "track":            p.get("track", "Unknown"),
-            "author":           p.get("author", "Unknown"),
-            "artwork":          p.get("artwork", "") or "https://via.placeholder.com/80?text=No+Art",
-            "queue":            p.get("queue", 0),
-            "listeners":        p.get("listeners", 0),
-            "paused":           p.get("paused", False),
-            "progress_percent": round(pct, 1),
-            "position_fmt":     format_duration(pos),
-            "duration_fmt":     format_duration(dur),
-        })
-
-    return {
-        "online":             raw.get("online", False),
-        "username":           raw.get("username", "Hidden Hamlet"),
-        "uptime_fmt":         format_uptime(raw.get("uptime", 0)),
-        "guilds":             raw.get("guilds", 0),
-        "members":            raw.get("members", 0),
-        "lavalink_connected": raw.get("lavalink_connected", False),
-        "lavalink_node":      raw.get("lavalink_node", "N/A"),
-        "players":            players,
-        "last_updated":       raw.get("last_updated", "-"),
-        "guilds_list":        raw.get("guilds_list", [])
-    }
-
-# ==========================================================
-# Shared guild channels (thread-safe)
-# ==========================================================
-_guild_lock = threading.Lock()
-_guild_channels: dict = {}
-
-def set_guild_channels(guild_id: str, channels: list):
-    with _guild_lock:
-        _guild_channels[guild_id] = channels
-
-def get_guild_channels(guild_id: str) -> list:
-    with _guild_lock:
-        return _guild_channels.get(guild_id, [])
-    
-# ==========================================================
-# Shared music state (thread-safe)
-# ==========================================================
-_music_lock = threading.Lock()
-_music_states: dict = {}
-
-def set_music_state(guild_id: str, state: dict):
-    with _music_lock:
-        _music_states[guild_id] = state
-
-def get_music_state(guild_id: str) -> dict:
-    with _music_lock:
-        return _music_states.get(guild_id, {"connected": False})
-    
-# ==========================================================
-# Shared bot instance
-# ==========================================================
-_bot_instance = None
-
-def set_bot_instance(bot):
-    global _bot_instance
-    _bot_instance = bot
-
-def get_bot_instance():
-    return _bot_instance
-    
 
 # ==========================================================
 # API — Music

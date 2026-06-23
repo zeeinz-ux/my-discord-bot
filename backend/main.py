@@ -24,8 +24,8 @@ load_dotenv()
 from backend.cogs.database import firebase_setup
 # ============================================
 
-# ===== [DASHBOARD] Import Flask app dari web/ =====
-from backend.web.web_app import (app, set_stats, set_guild_channels, set_music_state, set_bot_instance)
+# ===== [DASHBOARD] Import Firestore stats bridge =====
+from backend.utils.firestore_stats import set_stats, set_guild_channels, set_music_state, set_bot_instance
 # ==================================================
 
 intents = discord.Intents.default()
