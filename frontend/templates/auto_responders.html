@@ -1,83 +1,160 @@
 {% extends "base.html" %}
 {% block title %}Auto Responders — Hidden Hamlet{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/auto_responders.css') }}">
+{% endblock %}
+
 {% block content %}
+<!-- Hidden guild ID for JavaScript -->
+<input type="hidden" id="guild-id" value="{{ guild_id }}">
+
 <div class="page-wrap">
   <nav class="breadcrumb">
     <a href="/dashboard/{{ guild_id }}/">Dashboard</a>
     <span>›</span>
     <span>Auto Responders</span>
   </nav>
-  <div class="placeholder-page">
-    <div class="placeholder-icon">🤖</div>
-    <h1>Auto Responders</h1>
-    <p>Bot auto-reply saat keyword tertentu terdeteksi di chat.</p>
-    <div class="placeholder-status">
-      <span class="status-badge">🔧 Under Development</span>
+
+  <div class="page-header">
+    <div class="header-content">
+      <h1>🤖 Auto Responders</h1>
+      <p>Buat respons otomatis berdasarkan keyword di chat.</p>
     </div>
-    <div class="placeholder-hint">
-      <p>Fitur ini sedang dalam pengembangan.</p>
-      <p>Silakan gunakan <a href="/dashboard/{{ guild_id }}/welcome">Welcome Settings</a> atau <a href="/dashboard">Dashboard</a> yang sudah tersedia.</p>
+    <div class="header-toggle">
+      <label class="toggle-label">
+        <span>Fitur Auto-Responder</span>
+        <input type="checkbox" id="global-toggle" class="toggle-input">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <div class="content-grid">
+    <!-- Form Tambah/Edit -->
+    <div class="card form-card">
+      <h2>Tambah Auto-Responder</h2>
+      <form id="ar-form">
+        <input type="hidden" id="ar-id" value="">
+
+        <div class="form-group">
+          <label for="ar-keyword">Keyword <span class="required">*</span></label>
+          <input type="text" id="ar-keyword" placeholder="halo, hi, hey" required>
+          <small>Pisahkan dengan koma untuk multiple keywords</small>
+        </div>
+
+        <div class="form-group">
+          <label for="ar-response-type">Tipe Response</label>
+          <select id="ar-response-type">
+            <option value="text">Text Biasa</option>
+            <option value="embed">Embed (Cantik)</option>
+            <option value="image">Gambar</option>
+          </select>
+        </div>
+
+        <div class="form-group" id="response-content-group">
+          <label for="ar-response-content">Response <span class="required">*</span></label>
+          <textarea id="ar-response-content" rows="3" placeholder="Halo juga! 👋"></textarea>
+        </div>
+
+        <!-- Embed Options (visible when embed type) -->
+        <div class="embed-options" id="embed-options" style="display: none;">
+          <div class="form-row">
+            <div class="form-group half">
+              <label for="ar-embed-title">Embed Title</label>
+              <input type="text" id="ar-embed-title" placeholder="Judul Embed">
+            </div>
+            <div class="form-group half">
+              <label for="ar-embed-color">Warna (Hex)</label>
+              <input type="text" id="ar-embed-color" value="#5865F2" placeholder="#5865F2">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="ar-embed-thumbnail">Thumbnail URL</label>
+            <input type="text" id="ar-embed-thumbnail" placeholder="https://...">
+          </div>
+        </div>
+
+        <!-- Image Options (visible when image type) -->
+        <div class="image-options" id="image-options" style="display: none;">
+          <div class="form-group">
+            <label for="ar-response-image-url">URL Gambar</label>
+            <input type="text" id="ar-response-image-url" placeholder="https://...">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label for="ar-cooldown">Cooldown (detik)</label>
+            <input type="number" id="ar-cooldown" value="10" min="0">
+          </div>
+          <div class="form-group half">
+            <label>Options</label>
+            <div class="checkbox-group">
+              <label class="checkbox-item">
+                <input type="checkbox" id="ar-case-sensitive">
+                <span>Case Sensitive</span>
+              </label>
+              <label class="checkbox-item">
+                <input type="checkbox" id="ar-regex">
+                <span>Regex</span>
+              </label>
+              <label class="checkbox-item">
+                <input type="checkbox" id="ar-whole-word">
+                <span>Whole Word</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label for="ar-include-channels">Include Channels</label>
+            <select id="ar-include-channels" multiple>
+              {% for ch in channels %}
+              <option value="{{ ch.id }}">{{ ch.name }}</option>
+              {% endfor %}
+            </select>
+            <small>Tahan Ctrl untuk pilih banyak</small>
+          </div>
+          <div class="form-group half">
+            <label for="ar-exclude-channels">Exclude Channels</label>
+            <select id="ar-exclude-channels" multiple>
+              {% for ch in channels %}
+              <option value="{{ ch.id }}">{{ ch.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="checkbox-group vertical">
+          <label class="checkbox-item">
+            <input type="checkbox" id="ar-mention-user">
+            <span>Mention user di response</span>
+          </label>
+          <label class="checkbox-item">
+            <input type="checkbox" id="ar-delete-trigger">
+            <span>Hapus pesan trigger</span>
+          </label>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">➕ Tambah Auto-Responder</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- List Responders -->
+    <div class="card list-card">
+      <h2>Daftar Auto-Responders</h2>
+      <div id="ar-list" class="ar-list">
+        <div class="loading">Memuat data...</div>
+      </div>
     </div>
   </div>
 </div>
-<style>
-  .placeholder-page {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 60vh;
-    text-align: center;
-    padding: 2rem;
-  }
-  .placeholder-icon {
-    font-size: 4rem;
-    margin-bottom: 1rem;
-    opacity: 0.8;
-  }
-  .placeholder-page h1 {
-    font-size: 1.75rem;
-    font-weight: 700;
-    color: #f2f3f5;
-    margin-bottom: 0.5rem;
-  }
-  .placeholder-page p {
-    color: #a0a0a0;
-    font-size: 1rem;
-    max-width: 400px;
-    line-height: 1.6;
-  }
-  .placeholder-status {
-    margin: 1.5rem 0;
-  }
-  .status-badge {
-    display: inline-block;
-    background: #2d2d30;
-    border: 1px solid #404040;
-    color: #f0b232;
-    padding: 0.5rem 1rem;
-    border-radius: 20px;
-    font-size: 0.875rem;
-    font-weight: 600;
-  }
-  .placeholder-hint {
-    margin-top: 1rem;
-    padding: 1rem 1.5rem;
-    background: #1a1a1c;
-    border-radius: 8px;
-    border: 1px solid #2a2a2c;
-  }
-  .placeholder-hint p {
-    font-size: 0.875rem;
-    color: #888;
-    margin: 0.25rem 0;
-  }
-  .placeholder-hint a {
-    color: #5865f2;
-    text-decoration: none;
-  }
-  .placeholder-hint a:hover {
-    text-decoration: underline;
-  }
-</style>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/auto_responders.js') }}"></script>
 {% endblock %}

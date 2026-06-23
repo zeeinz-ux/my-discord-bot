@@ -338,7 +338,7 @@ my-discord-bot/
 │   └── templates/
 │       ├── base.html                  # Base template with sidebar + guild dropdown
 │       ├── welcome_settings.html      # Welcome config v3.7.6 (Dual Style + hidden inputs)
-│       ├── music_settings.html        # Music player (placeholder)
+│       ├── now_playing.html           # Music player (placeholder)
 │       ├── queue.html                 # Queue manager (placeholder)
 │       ├── playlists.html             # Playlist manager (placeholder)
 │       ├── boost_settings.html        # Boost tracker (placeholder)
