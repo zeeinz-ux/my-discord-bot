@@ -74,3 +74,6 @@ replit.nix
 *.bak
 backup/
 *backup*.py
+
+# Flask session storage
+backend/flask_session/
