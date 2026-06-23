@@ -48,6 +48,21 @@
     anchor.addEventListener("click", (e) => {
       const targetId = anchor.getAttribute("href");
       if (targetId === "#") return;
+
+      // Special case: #home scrolls to top of page
+      if (targetId === "#home") {
+        e.preventDefault();
+        // Tutup mobile menu kalau terbuka
+        if (mobileMenu && mobileMenu.classList.contains("open")) {
+          mobileMenu.classList.remove("open");
+          hamburgerBtn.classList.remove("open");
+          hamburgerBtn.setAttribute("aria-expanded", "false");
+          mobileMenu.setAttribute("aria-hidden", "true");
+        }
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+
       const targetEl = document.querySelector(targetId);
       if (targetEl) {
         e.preventDefault();
