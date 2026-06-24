@@ -34,6 +34,12 @@ import tenacity
 from ..database.firebase_setup import db
 from ...utils.spam_engine import SpamEngine
 from ...utils.intent_router import detect_intent
+from ...utils.firestore_stats import (
+    firestore_circuit_open,
+    trip_firestore_circuit,
+    firestore_retry_after,
+    _is_quota_error,
+)
 
 # ── Konstanta ──
 MAX_HISTORY_PAIRS = 5
@@ -236,6 +242,11 @@ class AIChat(commands.Cog):
     async def _save_chat_history(
         self, guild_id: str, user_id: str, user_msg: str, assistant_msg: str, personality: str = DEFAULT_PERSONALITY
     ) -> None:
+        # Skip entirely if the shared Firestore circuit breaker is open.
+        # Prevents cascading 429s when stats writes already tripped it.
+        if firestore_circuit_open():
+            return
+
         try:
             old_history = await self._get_chat_history(guild_id, user_id)
             now = datetime.now(timezone.utc).isoformat()
@@ -253,13 +264,23 @@ class AIChat(commands.Cog):
                 .collection("ai_chat")
                 .document(str(user_id))
             )
-            await asyncio.to_thread(
-                doc_ref.set,
-                {"history": new_history, "personality": personality, "updated_at": datetime.now(timezone.utc)},
-                merge=True,
-            )
+
+            def _blocking_set():
+                return doc_ref.set(
+                    {"history": new_history, "personality": personality, "updated_at": datetime.now(timezone.utc)},
+                    merge=True,
+                )
+
+            await asyncio.to_thread(_blocking_set)
         except Exception as e:
-            print(f"[AI CHAT] ⚠️ Error simpan history: {e}")
+            # Trip the SHARED circuit breaker if Firestore returned 429,
+            # so other cogs (leveling, stats) stop hammering too.
+            if _is_quota_error(e):
+                trip_firestore_circuit()
+                retry = firestore_retry_after()
+                print(f"[AI CHAT] ⚠️ Quota exceeded; circuit breaker tripped for {int(retry)}s. Dropping history save.")
+            else:
+                print(f"[AI CHAT] ⚠️ Error simpan history: {e}")
 
     def _build_server_context(self, guild: discord.Guild) -> str:
         if not guild:

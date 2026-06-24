@@ -47,10 +47,12 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Tunables — adjust per environment via env vars (no code change required)
 #
-#   FIRESTORE_DEBOUNCE     Seconds to collapse writes (default 15)
+#   FIRESTORE_DEBOUNCE     Seconds to collapse writes (default 30)
 #                          Lower = fresher data, more quota. Higher = staler data, safer.
-#   FIRESTORE_CIRCUIT_SEC  Seconds to disable all writes after a 429 trip (default 600 = 10 min)
+#                          Free-tier safe default is 30s; drop to 10-15s on Blaze plan.
+#   FIRESTORE_CIRCUIT_SEC  Seconds to disable all writes after a 429 trip (default 900 = 15 min)
 #                          Anything below 60 risks triggering a Google API throttle-ban.
+#                          Free-tier safe default is 900s; can be 300s on Blaze plan.
 # ---------------------------------------------------------------------------
 def _env_float(name: str, default: float) -> float:
     raw = os.getenv(name)
@@ -62,8 +64,10 @@ def _env_float(name: str, default: float) -> float:
         print(f"[FIRESTORE STATS] ⚠️ Invalid {name}={raw!r}, falling back to default {default}")
         return default
 
-WRITE_DEBOUNCE_SECONDS = _env_float("FIRESTORE_DEBOUNCE", 15.0)
-CIRCUIT_OPEN_SECONDS   = _env_float("FIRESTORE_CIRCUIT_SEC", 600.0)
+# Free-tier defaults: longer debounce to stay under the 20K writes/day cap.
+# Override with env vars FIRESTORE_DEBOUNCE / FIRESTORE_CIRCUIT_SEC for paid tiers.
+WRITE_DEBOUNCE_SECONDS = _env_float("FIRESTORE_DEBOUNCE", 30.0)
+CIRCUIT_OPEN_SECONDS   = _env_float("FIRESTORE_CIRCUIT_SEC", 900.0)
 DIRTY_HASH_SALT        = os.getenv("FIRESTORE_HASH_SALT", "hidden-hamlet-v1")
 
 COLLECTION = "bot_status"
@@ -449,6 +453,35 @@ def _fire_and_forget(coro):
         return
 
     loop.create_task(coro)
+
+
+# ---------------------------------------------------------------------------
+# Public helpers — reusable by other cogs that talk to Firestore.
+# Other cogs (leveling, ai_chat, etc.) can call:
+#
+#   from backend.utils.firestore_stats import firestore_circuit_open, trip_firestore_circuit
+#
+#   if firestore_circuit_open():
+#       return  # skip the write
+#   try:
+#       await asyncio.to_thread(...)
+#   except Exception as e:
+#       if is_quota_error(e):
+#           trip_firestore_circuit()
+# ---------------------------------------------------------------------------
+def firestore_circuit_open() -> bool:
+    """Return True when the shared circuit breaker is open (writes should be skipped)."""
+    return _circuit.is_open()
+
+
+def trip_firestore_circuit() -> None:
+    """Manually trip the shared circuit breaker (used by other cogs on 429)."""
+    _circuit.trip()
+
+
+def firestore_retry_after() -> float:
+    """Seconds until the shared circuit breaker allows probes again."""
+    return _circuit.retry_after()
 
 
 # ---------------------------------------------------------------------------
