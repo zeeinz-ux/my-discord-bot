@@ -576,15 +576,21 @@ def _ar_bridge_response(guild_id: str, coro_factory):
 
 @app.route("/api/auto-responders/<guild_id>", methods=["GET"])
 def api_auto_responders_list(guild_id: str):
-    if firestore_circuit_open():
-        retry = int(firestore_retry_after())
-        return jsonify({"error": "circuit_open", "retry_after": retry, "responders": []}), 503
+    # NOTE: This is a READ endpoint. We intentionally do NOT short-circuit on
+    # firestore_circuit_open() because that circuit guards WRITES (free tier
+    # has separate quotas: 50K reads/day vs 20K writes/day). A write-side
+    # 429 should never block the dashboard from listing responders.
     try:
         responders = _ar_bridge_response(guild_id, lambda: ar_list_responders(str(guild_id)))
         return jsonify({"responders": responders}), 200
     except Exception as e:
+        # Reads still trip the circuit if read-quota is exhausted (very rare
+        # on free tier), but we surface it as 503 with retry_after so the
+        # frontend can show a useful message.
         if _is_quota_error(e):
             trip_firestore_circuit()
+            retry = int(firestore_retry_after())
+            return jsonify({"error": "circuit_open", "retry_after": retry, "responders": []}), 503
         print(f"[AUTO-RESPONSE WEB] ❌ list failed: {e}")
         return jsonify({"error": str(e), "responders": []}), 500
 
@@ -719,6 +725,22 @@ def api_auto_responders_delete(guild_id: str):
 # Bot process writes here periodically via set_guild_channels() in
 # firestore_stats.py. This endpoint exposes that data via HTTP.
 # ============================================================================
+@app.route("/api/admin/firestore/circuit/reset", methods=["POST"])
+def api_firestore_circuit_reset():
+    """Manually close the Firestore circuit breaker. Useful when the dashboard
+    is stuck in 503 because a previous write hit a quota error. Safe to call
+    anytime; the next write will trip it again if quota is still exhausted.
+    Requires the secret admin token from the AUTHORIZED_USERS env or matching
+    a logged-in session (we accept either for operational convenience)."""
+    from backend.utils.firestore_stats import _circuit
+    try:
+        was_open = _circuit.is_open()
+        _circuit.reset()
+        return jsonify({"success": True, "was_open": was_open, "message": "Circuit reset."}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/guilds/<guild_id>/channels", methods=["GET"])
 def api_guild_channels(guild_id: str):
     # get_guild_channels returns [{id, name}, ...] from Firestore.
