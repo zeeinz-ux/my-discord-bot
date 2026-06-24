@@ -1,17 +1,22 @@
-LAVALINK_NODES = [
-    # Node 1: ajieblogs (Prioritas utama, terbukti berfungsi dari tes lokal Anda)
-    {
-        "uri": "https://lava-v4.ajieblogs.eu.org:443",
-        "password": "https://dsc.gg/ajieblogs",
-    },
-    # Node 2: Serenetia (Cadangan SSL, format sudah dikonversi dengan benar)
-    {
-        "uri": "https://lavalinkv4.serenetia.com:443",
-        "password": "https://seretia.link/discord",
-    },
-    # Node 3: Cadangan umum lainnya yang andal
-    {
-        "uri": "http://lava.link:80",
-        "password": "youshallnotpass",
-    },
-]
+import os
+
+def _get_lavalink_nodes():
+    url = os.getenv("LAVALINK_URL", "").strip()
+    password = os.getenv("LAVALINK_PASSWORD", "").strip()
+
+    if url and password:
+        if not url.startswith("http"):
+            url = "https://" + url
+        return [{"uri": url.rstrip("/"), "password": password}]
+
+    host = os.getenv("lavalink_host", "127.0.0.1")
+    port = os.getenv("lavalink_port", "2333")
+    password = os.getenv("lavalink_password", "youshallnotpass")
+    secure = os.getenv("lavalink_secure", "false").lower() == "true"
+
+    scheme = "https" if secure else "http"
+    uri = f"{scheme}://{host}:{port}"
+
+    return [{"uri": uri, "password": password}]
+
+LAVALINK_NODES = _get_lavalink_nodes()
