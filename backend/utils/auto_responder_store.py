@@ -1,25 +1,6 @@
 # ============================================================================
 # auto_responder_store.py — Free-function bridge for AutoResponder persistence
 # ============================================================================
-#
-# Why this exists:
-#   On Railway, the Flask web process (gunicorn) and the Discord bot process
-#   (python main.py) run as SEPARATE OS processes with SEPARATE memory.
-#   set_bot_instance() in the bot process does NOT propagate to the web
-#   process, so bot.get_cog("AutoResponder") in Flask always returns None.
-#
-# Solution:
-#   Expose the AutoResponder Firestore operations as free async functions.
-#   Both the cog (in-process calls) and the Flask route (cross-process) call
-#   the same functions. Firestore acts as the single source of truth.
-#
-# Reused from the cog (auto_response.py), these mirror the private methods so
-# existing slash commands keep working without changes.
-#
-# Concurrency:
-#   - All Firestore I/O goes through asyncio.to_thread (non-blocking).
-#   - The shared circuit breaker (firestore_stats) protects against 429 storms.
-# ============================================================================
 
 import asyncio
 import time
@@ -40,7 +21,6 @@ try:
         _is_quota_error,
     )
 except Exception:
-    # Fallback no-op shims so this module imports even before the patch is deployed.
     firestore_circuit_open = lambda: False
     trip_firestore_circuit = lambda: None
     firestore_retry_after = lambda: 0.0
@@ -49,15 +29,8 @@ except Exception:
 
 
 _COLLECTION = "guild_settings"
-_DOC_SETTINGS = "_settings_cache_ttl_seconds"  # not used; placeholder
-_DEFAULT_TTL = 300  # 5 minutes cache TTL (matches the cog)
+_DEFAULT_TTL = 300
 
-
-# ----------------------------------------------------------------------------
-# In-process cache (per Flask worker process — separate from the cog's cache).
-# Different processes, different caches, same TTL semantics. Last-writer-wins
-# is fine because every write invalidates both caches via Firestore round-trip.
-# ----------------------------------------------------------------------------
 _settings_cache: Dict[str, Dict[str, Any]] = {}
 _cooldown_cache: Dict[str, Dict[str, float]] = {}
 
@@ -99,20 +72,7 @@ async def ar_get_guild_settings(guild_id: str) -> Dict[str, Any]:
 
 
 async def ar_get_guild_settings_fresh(guild_id: str) -> Dict[str, Any]:
-    """Read guild settings bypassing the in-process cache.
-
-    Critical for the Flask web process, which under gunicorn/uvicorn runs
-    multiple worker processes — each has its own _settings_cache, so cache
-    invalidation in one worker does NOT reach the others. A write to one
-    worker would be invisible to other workers reading from stale cache for
-    up to _DEFAULT_TTL (5 minutes). The dashboard UX cannot tolerate that.
-
-    Use this in dashboard/web handlers where freshness beats read efficiency.
-    """
-    # Import here to avoid module-level cycle issues.
-    from backend.utils.auto_responder_store import _settings_cache, _COLLECTION, _is_quota_error
-    # NOTE: we already are in this module, so direct refs work — but the
-    # explicit import above documents intent.
+    """Read guild settings bypassing the in-process cache."""
     if firestore_circuit_open():
         return {"enabled": False, "responders": {}}
     if db is None:
@@ -133,7 +93,6 @@ async def ar_get_guild_settings_fresh(guild_id: str) -> Dict[str, Any]:
                 "enabled": data.get("auto_responders_enabled", False),
                 "responders": data.get("auto_responders", {}),
             }
-        # Re-populate cache for any subsequent read in the SAME worker.
         _settings_cache[guild_id] = {"data": settings, "last_fetched": time.time()}
         return settings
     except Exception as e:
@@ -157,10 +116,8 @@ async def ar_save_responder(guild_id: str, responder_id: str, config: dict) -> b
             doc = doc_ref.get()
             existing = doc.to_dict().get("auto_responders", {}) if doc.exists else {}
             existing[responder_id] = config
-            doc_ref.set(
-                {"auto_responders": existing, "auto_responders_enabled": True},
-                merge=True,
-            )
+            # FIX: Use update() instead of set(merge=True) for partial updates
+            doc_ref.update({"auto_responders": existing})
 
         await asyncio.to_thread(_blocking_set)
         _settings_cache.pop(guild_id, None)
@@ -183,18 +140,24 @@ async def ar_delete_responder(guild_id: str, responder_id: str) -> bool:
     try:
         doc_ref = db.collection(_COLLECTION).document(str(guild_id))
 
-        def _blocking_set():
+        def _blocking_delete():
             doc = doc_ref.get()
             if not doc.exists:
-                return
+                return False
             existing = doc.to_dict().get("auto_responders", {})
-            if responder_id in existing:
-                del existing[responder_id]
-                doc_ref.set({"auto_responders": existing}, merge=True)
+            if responder_id not in existing:
+                return False
 
-        await asyncio.to_thread(_blocking_set)
+            # FIX: Use Firestore delete field value to properly remove nested field
+            from google.cloud import firestore as fs
+            doc_ref.update({
+                f"auto_responders.{responder_id}": fs.DELETE_FIELD
+            })
+            return True
+
+        deleted = await asyncio.to_thread(_blocking_delete)
         _settings_cache.pop(guild_id, None)
-        return True
+        return deleted
 
     except Exception as e:
         if _is_quota_error(e):
@@ -205,7 +168,8 @@ async def ar_delete_responder(guild_id: str, responder_id: str) -> bool:
 
 async def ar_list_responders(guild_id: str) -> List[Dict[str, Any]]:
     """Return a flat list of responder dicts for the dashboard."""
-    settings = await ar_get_guild_settings(guild_id)
+    # FIX: Always use fresh fetch to avoid stale cache issues
+    settings = await ar_get_guild_settings_fresh(guild_id)
     result = []
     for rid, cfg in (settings.get("responders") or {}).items():
         result.append({"id": rid, **(cfg or {})})
