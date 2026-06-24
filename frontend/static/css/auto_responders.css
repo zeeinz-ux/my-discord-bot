@@ -394,3 +394,226 @@ select[multiple] option:disabled {
 .image-options.visible {
   display: block;
 }
+
+
+/* ==========================================================
+   Toast Notifications (centered, auto-dismiss, animated)
+   ========================================================== */
+.toast-container {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  pointer-events: none;
+}
+
+.toast {
+  min-width: 320px;
+  max-width: 480px;
+  padding: 1rem 1.5rem;
+  border-radius: 12px;
+  background: #2b2d31;
+  color: #f2f3f5;
+  border-left: 4px solid #5865f2;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  pointer-events: auto;
+  animation: toastIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  backdrop-filter: blur(8px);
+}
+
+.toast.toast-out {
+  animation: toastOut 0.25s cubic-bezier(0.7, 0, 0.84, 0) forwards;
+}
+
+.toast-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.toast-message {
+  flex: 1;
+  word-wrap: break-word;
+}
+
+.toast-success {
+  border-left-color: #3ba55d;
+  background: linear-gradient(135deg, #2b2d31 0%, #1e3a25 100%);
+}
+
+.toast-success .toast-icon::before {
+  content: "✓";
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  background: #3ba55d;
+  color: #ffffff;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 0.875rem;
+}
+
+.toast-error {
+  border-left-color: #ed4245;
+  background: linear-gradient(135deg, #2b2d31 0%, #3a1e1e 100%);
+}
+
+.toast-error .toast-icon::before {
+  content: "✕";
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  background: #ed4245;
+  color: #ffffff;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 0.875rem;
+}
+
+.toast-info {
+  border-left-color: #5865f2;
+  background: linear-gradient(135deg, #2b2d31 0%, #1e2543 100%);
+}
+
+.toast-info .toast-icon::before {
+  content: "i";
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  background: #5865f2;
+  color: #ffffff;
+  border-radius: 50%;
+  font-weight: 700;
+  font-style: italic;
+  font-size: 0.875rem;
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: scale(0.85) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes toastOut {
+  from {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.85) translateY(-8px);
+  }
+}
+
+/* ==========================================================
+   Confirm Modal (replaces native confirm())
+   ========================================================== */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease-out forwards;
+  backdrop-filter: blur(2px);
+}
+
+.confirm-modal {
+  background: #2b2d31;
+  border-radius: 12px;
+  padding: 1.5rem;
+  min-width: 360px;
+  max-width: 440px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  animation: modalIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.confirm-modal h3 {
+  margin: 0 0 0.75rem 0;
+  font-size: 1.125rem;
+  color: #f2f3f5;
+}
+
+.confirm-modal p {
+  margin: 0 0 1.25rem 0;
+  color: #b5bac1;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+.confirm-actions button {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.confirm-actions button:active {
+  transform: scale(0.97);
+}
+
+.confirm-actions .btn-cancel {
+  background: #3f4147;
+  color: #f2f3f5;
+}
+
+.confirm-actions .btn-cancel:hover {
+  background: #4e5258;
+}
+
+.confirm-actions .btn-confirm {
+  background: #ed4245;
+  color: #ffffff;
+}
+
+.confirm-actions .btn-confirm:hover {
+  background: #c93b3e;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}

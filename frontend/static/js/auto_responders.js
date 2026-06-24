@@ -277,11 +277,15 @@ async function saveResponder() {
     const result = await resp.json();
 
     if (result.success) {
+      const wasEditing = !!editingId;
       resetForm();
       await loadAutoResponders();
-      showAlert('Auto-responder saved!', 'success');
+      showAlert(
+        wasEditing ? 'Perubahan berhasil disimpan.' : 'Auto-responder baru berhasil dibuat.',
+        'success'
+      );
     } else {
-      showAlert('Error: ' + result.message, 'error');
+      showAlert(result.message || 'Gagal menyimpan auto-responder.', 'error');
     }
   } catch (e) {
     showAlert('Error saving: ' + e, 'error');
@@ -317,6 +321,52 @@ async function editResponder(id) {
     document.getElementById('ar-whole-word').checked = ar.match_whole_word || false;
     document.getElementById('ar-mention-user').checked = ar.mention_user || false;
     document.getElementById('ar-delete-trigger').checked = ar.delete_trigger || false;
+
+    // Populate channel selections so editing doesn't wipe them on save.
+    // Backend stores under ar.channels.include / ar.channels.exclude (object form),
+    // but our save payload flattens to channel_ids / exclude_channels (arrays).
+    // Support both shapes defensively.
+    const includeSel = document.getElementById('ar-include-channels');
+    const excludeSel = document.getElementById('ar-exclude-channels');
+
+    function extractIds(value) {
+      if (Array.isArray(value)) return value.map(String);
+      if (value && typeof value === 'object') return Object.keys(value).map(String);
+      return [];
+    }
+
+    const includeIds = extractIds(
+      ar.channel_ids ??
+      (ar.channels && ar.channels.include) ??
+      (ar.include_channels)
+    );
+    const excludeIds = extractIds(
+      ar.exclude_channels ??
+      (ar.channels && ar.channels.exclude) ??
+      []
+    );
+
+    function applySelection(sel, ids) {
+      if (!sel) return;
+      const idSet = new Set(ids.map(String));
+      Array.from(sel.options).forEach((opt) => {
+        opt.selected = idSet.has(String(opt.value));
+      });
+      // Trigger change so the counter updates
+      sel.dispatchEvent(new Event('change'));
+    }
+
+    // Wait one tick if populateChannelSelects is still loading, then re-apply
+    if (includeSel && includeSel.options.length <= 1 && includeSel.options[0].disabled) {
+      // Channel list still loading - wait and retry once
+      setTimeout(() => {
+        applySelection(includeSel, includeIds);
+        applySelection(excludeSel, excludeIds);
+      }, 1500);
+    } else {
+      applySelection(includeSel, includeIds);
+      applySelection(excludeSel, excludeIds);
+    }
 
     // Trigger change event to show/hide options
     const responseTypeEl = document.getElementById('ar-response-type');
@@ -355,25 +405,40 @@ async function editResponder(id) {
  * Toggle responder enabled/disabled
  */
 async function toggleResponder(id, enabled) {
+  // Optimistic UI: flip the button immediately, revert if backend fails.
+  const button = document.querySelector(`.ar-item[data-id="${id}"] .ar-btn-toggle`);
+  const originalText = button ? button.textContent : null;
+  if (button) {
+    button.disabled = true;
+    button.textContent = enabled ? '⏸️ Disable' : '▶️ Enable';
+  }
+
   try {
-    const resp = await fetch(`/api/auto-responders/${guildId}`);
-    const data = await resp.json();
-
-    const ar = (data.responders || []).find(r => r.id === id);
-    if (!ar) return;
-
-    ar.enabled = enabled;
-
-    await fetch(`/api/auto-responders/${guildId}/save`, {
+    const resp = await fetch(`/api/auto-responders/${guildId}/toggle`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(ar)
+      body: JSON.stringify({ id: id, enable: enabled })
     });
+    const result = await resp.json();
+
+    if (!result.success) {
+      // Revert button state
+      if (button && originalText) button.textContent = originalText;
+      showAlert(result.message || 'Gagal mengubah status auto-responder.', 'error');
+      return;
+    }
 
     await loadAutoResponders();
+    showAlert(
+      enabled ? 'Auto-responder diaktifkan.' : 'Auto-responder dinonaktifkan.',
+      'success'
+    );
   } catch (e) {
+    if (button && originalText) button.textContent = originalText;
     showAlert('Error: ' + e, 'error');
     console.error('[Auto Responders] Toggle error:', e);
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -381,7 +446,27 @@ async function toggleResponder(id, enabled) {
  * Delete responder
  */
 async function deleteResponder(id) {
-  if (!confirm('Yakin hapus auto-responder ini?')) return;
+  // Find the responder to show its name in the confirmation
+  let arName = id;
+  try {
+    const resp = await fetch(`/api/auto-responders/${guildId}`);
+    const data = await resp.json();
+    const ar = (data.responders || []).find(r => r.id === id);
+    if (ar) {
+      const kw = Array.isArray(ar.keyword) ? ar.keyword.join(', ') : ar.keyword;
+      arName = kw || id;
+    }
+  } catch (_) {
+    // Fall back to using the id as the display name
+  }
+
+  const confirmed = await showConfirm(
+    'Hapus Auto-Responder?',
+    `Auto-responder untuk keyword "${arName}" akan dihapus permanen. Tindakan ini tidak bisa dibatalkan.`,
+    '🗑️ Hapus',
+    'Batal'
+  );
+  if (!confirmed) return;
 
   try {
     const resp = await fetch(`/api/auto-responders/${guildId}/delete`, {
@@ -394,8 +479,9 @@ async function deleteResponder(id) {
 
     if (result.success) {
       await loadAutoResponders();
+      showAlert(`Auto-responder "${arName}" berhasil dihapus.`, 'success');
     } else {
-      showAlert('Error: ' + result.message, 'error');
+      showAlert(result.message || 'Gagal menghapus auto-responder.', 'error');
     }
   } catch (e) {
     showAlert('Error: ' + e, 'error');
@@ -432,9 +518,116 @@ function resetForm() {
 /**
  * Show alert message
  */
-function showAlert(message, type) {
-  // Simple alert for now - can be replaced with toast notifications
-  alert(message);
+/**
+ * Show a centered toast notification (replaces ugly native alert()).
+ * @param {string} message - Text to display
+ * @param {'success'|'error'|'info'} type - Visual variant
+ * @param {number} duration - ms before auto-dismiss (0 = no auto-dismiss)
+ */
+function showAlert(message, type = 'info', duration = 3000) {
+  // Ensure container exists (created once on first toast)
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    container.className = 'toast-container';
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  toast.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+
+  const icon = document.createElement('span');
+  icon.className = 'toast-icon';
+  icon.setAttribute('aria-hidden', 'true');
+
+  const msg = document.createElement('span');
+  msg.className = 'toast-message';
+  msg.textContent = message;
+
+  toast.appendChild(icon);
+  toast.appendChild(msg);
+  container.appendChild(toast);
+
+  // Click to dismiss
+  toast.addEventListener('click', () => dismissToast(toast));
+
+  // Auto-dismiss
+  if (duration > 0) {
+    setTimeout(() => dismissToast(toast), duration);
+  }
+
+  return toast;
+}
+
+function dismissToast(toast) {
+  if (!toast || !toast.parentNode) return;
+  toast.classList.add('toast-out');
+  setTimeout(() => toast.parentNode && toast.parentNode.removeChild(toast), 250);
+}
+
+/**
+ * Show a centered confirm modal (replaces native confirm()).
+ * @returns {Promise<boolean>} resolves true on confirm, false on cancel
+ */
+function showConfirm(title, message, confirmText = 'Confirm', cancelText = 'Cancel') {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+
+    const modal = document.createElement('div');
+    modal.className = 'confirm-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+
+    const h3 = document.createElement('h3');
+    h3.textContent = title;
+    const p = document.createElement('p');
+    p.textContent = message;
+
+    const actions = document.createElement('div');
+    actions.className = 'confirm-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn-cancel';
+    cancelBtn.textContent = cancelText;
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'btn-confirm';
+    confirmBtn.textContent = confirmText;
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(confirmBtn);
+    modal.appendChild(h3);
+    modal.appendChild(p);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // Focus trap - focus confirm button by default
+    confirmBtn.focus();
+
+    function cleanup(result) {
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      document.removeEventListener('keydown', onKey);
+      resolve(result);
+    }
+
+    cancelBtn.addEventListener('click', () => cleanup(false));
+    confirmBtn.addEventListener('click', () => cleanup(true));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) cleanup(false);
+    });
+    function onKey(e) {
+      if (e.key === 'Escape') cleanup(false);
+      else if (e.key === 'Enter') cleanup(true);
+    }
+    document.addEventListener('keydown', onKey);
+  });
 }
 
 // Export functions for global access
