@@ -1,5 +1,6 @@
 import asyncio
 import os
+import subprocess
 import time
 import shutil
 from dataclasses import dataclass, field
@@ -211,6 +212,7 @@ class MusicController:
         self._queue_history = []
         self._single_loop_track = None
         self._guild_id = None
+        self._ytdlp_proc: Optional[subprocess.Popen] = None
 
     @property
     def channel(self):
@@ -245,10 +247,19 @@ class MusicController:
         if self.vc.is_playing() or self.vc.is_paused():
             self.vc.stop()
 
+        self._kill_ytdlp()
+
+        url = track.webpage_url or track.uri
         try:
-            stream_url = await track.get_stream_url()
+            proc = await asyncio.to_thread(
+                lambda: subprocess.Popen(
+                    ["yt-dlp", "-f", "bestaudio", "-o", "-", "--no-part", url],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+            )
         except Exception as e:
-            print(f"[PLAY ERROR] Failed to get stream URL: {e}")
+            print(f"[PLAY ERROR] Failed to start yt-dlp: {e}")
             if self.home:
                 try:
                     await self.home.send(f"❌ Gagal memutar: {e}")
@@ -257,11 +268,11 @@ class MusicController:
             await self._play_next()
             return
 
+        self._ytdlp_proc = proc
         ffmpeg_opts = {
-            "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
             "options": "-vn",
         }
-        source = discord.FFmpegPCMAudio(stream_url, executable=FFMPEG_PATH, **ffmpeg_opts)
+        source = discord.FFmpegPCMAudio(proc.stdout, executable=FFMPEG_PATH, pipe=True, **ffmpeg_opts)
         vol_source = discord.PCMVolumeTransformer(source, volume=self._volume / 100.0)
         self.vc.play(vol_source, after=lambda e: self._on_track_end_wrapper(e))
         self._start_time = time.time()
@@ -274,6 +285,7 @@ class MusicController:
         asyncio.run_coroutine_threadsafe(self._on_track_end(error), self.vc.client.loop if self.vc and self.vc.client else None)
 
     async def _on_track_end(self, error=None):
+        self._kill_ytdlp()
         await asyncio.sleep(0.3)
         async with self._track_lock:
             if self.loop_mode == "single" and self._single_loop_track:
@@ -307,8 +319,18 @@ class MusicController:
         if not self.current_track or not self.vc:
             return
         self.vc.stop()
+        self._kill_ytdlp()
+
+        url = self.current_track.webpage_url or self.current_track.uri
+        position_sec = position_ms / 1000
         try:
-            stream_url = await self.current_track.get_stream_url()
+            proc = await asyncio.to_thread(
+                lambda: subprocess.Popen(
+                    ["yt-dlp", "-f", "bestaudio", "-o", "-", "--no-part", url],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+            )
         except Exception as e:
             if self.home:
                 try:
@@ -317,18 +339,31 @@ class MusicController:
                     pass
             return
 
-        position_sec = position_ms / 1000
+        self._ytdlp_proc = proc
         ffmpeg_opts = {
-            "before_options": f"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -ss {position_sec}",
+            "before_options": f"-ss {position_sec} -noaccurate_seek",
             "options": "-vn",
         }
-        source = discord.FFmpegPCMAudio(stream_url, executable=FFMPEG_PATH, **ffmpeg_opts)
+        source = discord.FFmpegPCMAudio(proc.stdout, executable=FFMPEG_PATH, pipe=True, **ffmpeg_opts)
         vol_source = discord.PCMVolumeTransformer(source, volume=self._volume / 100.0)
         self.vc.play(vol_source, after=lambda e: self._on_track_end_wrapper(e))
         self._start_time = time.time() - position_sec
         self._paused = False
 
+    def _kill_ytdlp(self):
+        if self._ytdlp_proc:
+            try:
+                self._ytdlp_proc.kill()
+            except Exception:
+                pass
+            try:
+                self._ytdlp_proc.wait(timeout=2)
+            except Exception:
+                pass
+            self._ytdlp_proc = None
+
     async def stop(self):
+        self._kill_ytdlp()
         self.loop_mode = "off"
         self.autoplay = False
         self._queue_history.clear()
@@ -343,6 +378,7 @@ class MusicController:
                 pass
 
     async def disconnect(self):
+        self._kill_ytdlp()
         if self.vc:
             self.vc.stop()
             try:
