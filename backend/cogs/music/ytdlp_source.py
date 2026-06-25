@@ -12,9 +12,13 @@ import yt_dlp
 def _find_ffmpeg() -> str:
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg:
+        print(f"[FFMPEG] Found via shutil.which: {ffmpeg}")
         return ffmpeg
 
     common_paths = [
+        "/usr/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg.exe",
         r"C:\Program Files\KMPlayer 64X\LAVFilters64\ffmpeg.exe",
         r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
         r"C:\ffmpeg\bin\ffmpeg.exe",
@@ -22,6 +26,7 @@ def _find_ffmpeg() -> str:
     ]
     for path in common_paths:
         if os.path.isfile(path):
+            print(f"[FFMPEG] Found via fallback path: {path}")
             return path
 
     print("[FFMPEG] ⚠️ ffmpeg tidak ditemukan di PATH. Musik mungkin tidak berfungsi.")

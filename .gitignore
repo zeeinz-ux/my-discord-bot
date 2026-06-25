@@ -60,6 +60,9 @@ Thumbs.db
 replit.nix
 .breakpoints
 
+# Lavalink config
+application.yml
+
 # Lavalink JAR (opsional, kalau mau clone manual download)
 # lavalink/Lavalink.jar
 
