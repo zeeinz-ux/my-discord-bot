@@ -472,6 +472,7 @@ class Music(commands.Cog):
         controller = self.get_controller(interaction.guild_id)
         controller._paused = True
         controller._paused_position = time.time() - controller._start_time
+        await controller._update_now_playing()
         await interaction.response.send_message("⏸️ Lagu di-pause.")
 
     @app_commands.command(name="resume", description="Lanjutkan lagu yang di-pause")
@@ -484,6 +485,7 @@ class Music(commands.Cog):
         controller = self.get_controller(interaction.guild_id)
         controller._paused = False
         controller._start_time = time.time() - controller._paused_position
+        await controller._update_now_playing()
         await interaction.response.send_message("▶️ Lagu dilanjutkan.")
 
     @app_commands.command(name="skip", description="Skip ke lagu berikutnya")
@@ -532,6 +534,10 @@ class Music(commands.Cog):
             await interaction.followup.send("📭 Queue kosong.")
             return
 
+        if not controller.home:
+            controller.home = interaction.channel
+        await controller._update_now_playing()
+
         embed = discord.Embed(title="🎶 Music Queue", color=discord.Color.purple())
 
         try:
@@ -575,30 +581,15 @@ class Music(commands.Cog):
             await interaction.response.send_message("❌ Tidak ada lagu yang sedang diputar.", ephemeral=True)
             return
 
-        track = controller.current_track
-        embed = discord.Embed(
-            title="▶️ Now Playing",
-            description=f"[{track.title}]({track.uri})",
-            color=discord.Color.green(),
-        )
-        embed.add_field(name="Author", value=track.author or "Unknown", inline=True)
-        embed.add_field(name="Duration", value=format_duration(track.duration), inline=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
 
-        position = controller.position
-        embed.add_field(
-            name="Progress",
-            value=self._progress_bar(position, track.duration),
-            inline=False,
-        )
-
-        embed.add_field(name="Autoplay", value="ON" if controller.autoplay else "OFF", inline=True)
-        loop_text = {"single": "Single", "queue": "Queue", "off": "OFF"}.get(controller.loop_mode, "OFF")
-        embed.add_field(name="Loop", value=loop_text, inline=True)
-
-        if track.artwork:
-            embed.set_thumbnail(url=track.artwork)
-
-        await interaction.response.send_message(embed=embed)
+        if not controller.home:
+            controller.home = interaction.channel
+        await controller._update_now_playing()
+        await interaction.followup.send("▶️ Cek pesan **Now Playing** di atas untuk info lengkap.", ephemeral=True)
 
     @app_commands.command(name="volume", description="Atur volume bot (0-1000)")
     @app_commands.describe(level="Volume level 0-1000 (default 100)")

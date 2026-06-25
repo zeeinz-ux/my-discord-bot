@@ -6,6 +6,8 @@ import shutil
 from dataclasses import dataclass, field
 from typing import Optional
 
+from backend.utils.formatters import format_duration
+
 import discord
 import yt_dlp
 
@@ -214,6 +216,8 @@ class MusicController:
         self._single_loop_track = None
         self._guild_id = None
         self._ytdlp_proc: Optional[subprocess.Popen] = None
+        self._now_playing_msg: Optional[discord.Message] = None
+        self._np_updater_task: Optional[asyncio.Task] = None
 
     @property
     def channel(self):
@@ -241,6 +245,71 @@ class MusicController:
         if self.vc and self.vc.source:
             if hasattr(self.vc.source, "volume"):
                 self.vc.source.volume = self._volume / 100.0
+
+    @staticmethod
+    def _progress_bar(current_ms: int, total_ms: int, length: int = 12) -> str:
+        if total_ms <= 0:
+            return "🔴 LIVE"
+        ratio = min(current_ms / total_ms, 1.0)
+        filled = int(ratio * length)
+        bar = "▬" * filled + "🔘" + "▬" * (length - filled - 1)
+        return f"{bar} `{format_duration(current_ms)} / {format_duration(total_ms)}`"
+
+    def _build_np_embed(self) -> discord.Embed:
+        track = self.current_track
+        if not track:
+            return discord.Embed(title="⏹️ Nothing Playing", color=discord.Color.dark_gray())
+        embed = discord.Embed(
+            title="▶️ Now Playing",
+            description=f"[{track.title}]({track.uri})",
+            color=discord.Color.green(),
+        )
+        embed.add_field(name="Author", value=track.author or "Unknown", inline=True)
+        embed.add_field(name="Duration", value=format_duration(track.duration), inline=True)
+        position = self.position
+        embed.add_field(
+            name="Progress",
+            value=self._progress_bar(position, track.duration),
+            inline=False,
+        )
+        embed.add_field(name="In Queue", value=str(len(self.queue)), inline=True)
+        embed.add_field(name="Autoplay", value="ON" if self.autoplay else "OFF", inline=True)
+        loop_text = {"single": "Single", "queue": "Queue Loop", "off": "OFF"}.get(self.loop_mode, "OFF")
+        embed.add_field(name="Loop", value=loop_text, inline=True)
+        if track.artwork:
+            embed.set_thumbnail(url=track.artwork)
+        return embed
+
+    async def _update_now_playing(self):
+        embed = self._build_np_embed()
+        try:
+            if self._now_playing_msg:
+                await self._now_playing_msg.edit(embed=embed)
+            elif self.home:
+                self._now_playing_msg = await self.home.send(embed=embed)
+        except discord.NotFound:
+            self._now_playing_msg = None
+        except discord.Forbidden:
+            pass
+
+    async def _np_updater_loop(self):
+        try:
+            while True:
+                await asyncio.sleep(10)
+                if not self.current_track or (not self.vc.is_playing() and not self.vc.is_paused()):
+                    continue
+                await self._update_now_playing()
+        except asyncio.CancelledError:
+            pass
+
+    def _start_np_updater(self):
+        self._stop_np_updater()
+        self._np_updater_task = asyncio.create_task(self._np_updater_loop())
+
+    def _stop_np_updater(self):
+        if self._np_updater_task and not self._np_updater_task.done():
+            self._np_updater_task.cancel()
+            self._np_updater_task = None
 
     async def play(self, track: YtDlpTrack):
         self.current_track = track
@@ -279,6 +348,8 @@ class MusicController:
         self._start_time = time.time()
         self._paused = False
         self._paused_position = 0.0
+        await self._update_now_playing()
+        self._start_np_updater()
 
     def _on_track_end_wrapper(self, error):
         if error:
@@ -310,6 +381,8 @@ class MusicController:
                     print(f"[AUTOPLAY ERROR] {e}")
             self.current_track = None
             self._single_loop_track = None
+            self._stop_np_updater()
+            await self._update_now_playing()
 
     async def _play_next(self):
         if self.queue:
@@ -350,6 +423,8 @@ class MusicController:
         self.vc.play(vol_source, after=lambda e: self._on_track_end_wrapper(e))
         self._start_time = time.time() - position_sec
         self._paused = False
+        await self._update_now_playing()
+        self._start_np_updater()
 
     def _kill_ytdlp(self):
         if self._ytdlp_proc:
@@ -363,8 +438,20 @@ class MusicController:
                 pass
             self._ytdlp_proc = None
 
+    async def _cleanup_np(self):
+        self._stop_np_updater()
+        if self._now_playing_msg:
+            try:
+                await self._now_playing_msg.edit(
+                    embed=discord.Embed(title="⏹️ Stopped", color=discord.Color.dark_gray())
+                )
+            except Exception:
+                pass
+            self._now_playing_msg = None
+
     async def stop(self):
         self._kill_ytdlp()
+        await self._cleanup_np()
         self.loop_mode = "off"
         self.autoplay = False
         self._queue_history.clear()
@@ -380,6 +467,7 @@ class MusicController:
 
     async def disconnect(self):
         self._kill_ytdlp()
+        await self._cleanup_np()
         if self.vc:
             self.vc.stop()
             try:
