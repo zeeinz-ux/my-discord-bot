@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 SPOTIFYDOWN_BASE = "https://api.spotifydown.com"
 SPOTIFY_URL_PATTERNS = [
-    r"(?:https?://)?(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?)?(?P<type>track|playlist|album)/(?P<id>[A-Za-z0-9]+)",
-    r"spotify:(?P<type>track|playlist|album):(?P<id>[A-Za-z0-9]+)",
+    r"(?:https?://)?(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?)?(?P<type>track|playlist|album|artist)/(?P<id>[A-Za-z0-9]+)",
+    r"spotify:(?P<type>track|playlist|album|artist):(?P<id>[A-Za-z0-9]+)",
 ]
 REQUEST_TIMEOUT = 10
 MAX_RETRIES = 1
@@ -262,6 +262,24 @@ class SpotifyOfficialClient:
     async def get_album_tracks(self, session: aiohttp.ClientSession, album_id: str) -> List[Dict]:
         return await self._fetch_paginated(session, f"https://api.spotify.com/v1/albums/{album_id}/tracks")
 
+    async def get_artist_top_tracks(self, session: aiohttp.ClientSession, artist_id: str) -> List[Dict]:
+        token = await self._get_token(session)
+        if not token:
+            return []
+        try:
+            async with session.get(
+                f"https://api.spotify.com/v1/artists/{artist_id}/top-tracks",
+                params={"market": "US"},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get("tracks", [])[:10]
+        except Exception:
+            pass
+        return []
+
 # ==========================================================
 # HELPERS
 # ==========================================================
@@ -402,6 +420,43 @@ class SpotifyResolver:
 
         if content_type == "album":
             return await self._resolve_album(content_id, sd, session, url)
+
+        if content_type == "artist":
+            return await self._resolve_artist(content_id, sd, session, url)
+
+        return [], "failed"
+
+    async def _resolve_artist(
+        self,
+        artist_id: str,
+        sd: SpotifyDownClient,
+        session: aiohttp.ClientSession,
+        original_url: str,
+    ) -> Tuple[List[ResolvedTrack], str]:
+        # 1) Spotify Official API
+        if self.official:
+            raw = await self.official.get_artist_top_tracks(session, artist_id)
+            if raw:
+                return [self._track_to_resolved(t, t.get("id", ""), "spotify_official") for t in raw], "spotify_official"
+
+        # 2) Try oEmbed for artist name, then resolve top tracks via public page
+        meta = await _get_spotify_metadata_oembed(session, original_url)
+        if meta and meta.get("name"):
+            artist_name = meta.get("name", "")
+            query = f"ytsearch:{artist_name} top tracks"
+            return [
+                ResolvedTrack(
+                    name=f"{artist_name} - Top Tracks",
+                    artists=artist_name,
+                    album=None,
+                    duration_ms=None,
+                    artwork=meta.get("artwork"),
+                    spotify_id=artist_id,
+                    youtube_id=None,
+                    query=query,
+                    source="ytsearch",
+                )
+            ], "ytsearch"
 
         return [], "failed"
 

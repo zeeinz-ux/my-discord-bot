@@ -60,9 +60,11 @@ class Music(commands.Cog):
             (r'open\.spotify\.com/track/([a-zA-Z0-9]+)', 'track'),
             (r'open\.spotify\.com/playlist/([a-zA-Z0-9]+)', 'playlist'),
             (r'open\.spotify\.com/album/([a-zA-Z0-9]+)', 'album'),
+            (r'open\.spotify\.com/artist/([a-zA-Z0-9]+)', 'artist'),
             (r'track/([a-zA-Z0-9]+)', 'track'),
             (r'playlist/([a-zA-Z0-9]+)', 'playlist'),
             (r'album/([a-zA-Z0-9]+)', 'album'),
+            (r'artist/([a-zA-Z0-9]+)', 'artist'),
         ]
         for pattern, type_ in patterns:
             match = re.search(pattern, url)
