@@ -22,26 +22,35 @@ COOKIES_FROM_BROWSER = os.getenv("COOKIES_FROM_BROWSER", "")
 PO_TOKEN = os.getenv("YOUTUBE_PO_TOKEN", "")
 
 # Auth args for yt-dlp CLI (priority: PO Token > Browser Cookie > Cookie File > iOS fallback)
+_YTDLP_BASE = ["--retries", "3", "--fragment-retries", "3",
+               "--add-header", "referer:youtube.com",
+               "--add-header", "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"]
+
 if PO_TOKEN:
-    YTDLP_AUTH_ARGS = ["--extractor-args", f"youtube:po_token=web+{PO_TOKEN};player_client=web"]
+    _YTDLP_AUTH = ["--extractor-args", f"youtube:po_token=web+{PO_TOKEN};player_client=web"]
 elif COOKIES_FROM_BROWSER:
-    YTDLP_AUTH_ARGS = ["--cookies-from-browser", COOKIES_FROM_BROWSER]
+    _YTDLP_AUTH = ["--cookies-from-browser", COOKIES_FROM_BROWSER]
 elif COOKIES_FILE and os.path.isfile(COOKIES_FILE):
-    YTDLP_AUTH_ARGS = ["--cookies", COOKIES_FILE]
+    _YTDLP_AUTH = ["--cookies", COOKIES_FILE]
 else:
     # iOS client fallback — bypasses YouTube bot detection on VPS/Railway IPs
-    YTDLP_AUTH_ARGS = ["--extractor-args", "youtube:player_client=ios"]
+    _YTDLP_AUTH = ["--extractor-args", "youtube:player_client=ios"]
+
+YTDLP_AUTH_ARGS = _YTDLP_BASE + _YTDLP_AUTH
 
 # Auth opts for yt-dlp Python library
 def _get_ytdlp_auth_opts() -> dict:
+    opts = {"retries": 3, "fragment_retries": 3}
     if PO_TOKEN:
-        return {"extractor_args": {"youtube": [f"po_token=web+{PO_TOKEN}", "player_client=web"]}}
+        opts["extractor_args"] = {"youtube": [f"po_token=web+{PO_TOKEN}", "player_client=web"]}
     elif COOKIES_FROM_BROWSER:
-        return {"cookiefile": None, "cookiesfrombrowser": (COOKIES_FROM_BROWSER,)}
+        opts["cookiefile"] = None
+        opts["cookiesfrombrowser"] = (COOKIES_FROM_BROWSER,)
     elif COOKIES_FILE:
-        return {"cookiefile": COOKIES_FILE}
+        opts["cookiefile"] = COOKIES_FILE
     else:
-        return {"extractor_args": {"youtube": ["player_client=ios"]}}
+        opts["extractor_args"] = {"youtube": ["player_client=ios"]}
+    return opts
 
 warnings.filterwarnings("ignore", message=".*line buffering.*binary mode.*")
 
