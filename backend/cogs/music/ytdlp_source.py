@@ -1,8 +1,11 @@
 import asyncio
 import os
+import json
 import subprocess
 import time
 import shutil
+import hashlib
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -10,6 +13,14 @@ from backend.utils.formatters import format_duration
 
 import discord
 import yt_dlp
+
+CACHE_DIR = "/tmp/discord_audio_cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+COOKIES_FILE = os.getenv("COOKIES_FILE", "")
+YTDLP_COOKIE_ARGS = ["--cookies", COOKIES_FILE] if COOKIES_FILE and os.path.isfile(COOKIES_FILE) else []
+
+warnings.filterwarnings("ignore", message=".*line buffering.*binary mode.*")
 
 
 def _find_ffmpeg() -> str:
@@ -238,9 +249,33 @@ class MusicController:
         self._queue_history = []
         self._single_loop_track = None
         self._guild_id = None
-        self._ytdlp_proc: Optional[subprocess.Popen] = None
+        self._current_file: Optional[str] = None
+        self._preloaded_file: Optional[str] = None
+        self._preloaded_for: Optional[str] = None
         self._now_playing_msg: Optional[discord.Message] = None
         self._np_updater_task: Optional[asyncio.Task] = None
+
+    def _cache_path(self, url: str) -> str:
+        h = hashlib.md5(url.encode()).hexdigest()
+        return os.path.join(CACHE_DIR, f"{h}.opus")
+
+    async def _download_track(self, url: str) -> Optional[str]:
+        dest = self._cache_path(url)
+        if os.path.isfile(dest):
+            return dest
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ["yt-dlp", "-f", "bestaudio", "-o", dest, "--no-part", "--no-progress", "--extract-audio", "--audio-format", "opus", url, *YTDLP_COOKIE_ARGS],
+                    capture_output=True, timeout=120,
+                )
+            )
+            return dest if os.path.isfile(dest) else None
+        except Exception as e:
+            print(f"[DOWNLOAD ERROR] {url[:60]}: {e}")
+            return None
 
     @property
     def channel(self):
@@ -340,62 +375,68 @@ class MusicController:
         if self.vc.is_playing() or self.vc.is_paused():
             self.vc.stop()
 
-        self._kill_ytdlp()
-
         url = track.webpage_url or track.uri
-        try:
-            proc = await asyncio.to_thread(
-                lambda: subprocess.Popen(
-                    ["yt-dlp", "-f", "bestaudio", "-o", "-", "--no-part", "--no-progress", url],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-            )
-        except Exception as e:
-            print(f"[PLAY ERROR] Failed to start yt-dlp: {e}")
+
+        file_path = self._preloaded_file if self._preloaded_for == url else None
+        if file_path and os.path.isfile(file_path):
+            self._preloaded_file = None
+            self._preloaded_for = None
+            print(f"[CACHE] Using preloaded file for {track.title}")
+        else:
+            self._preloaded_file = None
+            self._preloaded_for = None
+            await self._update_status(f"⏬ Downloading {track.title}...")
+            file_path = await self._download_track(url)
+
+        if not file_path or not os.path.isfile(file_path):
+            print(f"[PLAY ERROR] Failed to download {track.title}")
             if self.home:
                 try:
-                    await self.home.send(f"❌ Gagal memutar: {e}")
+                    await self.home.send(f"❌ Gagal mendownload: {track.title}")
                 except Exception:
                     pass
             await self._play_next()
             return
 
-        self._ytdlp_proc = proc
-        ffmpeg_opts = {
-            "options": "-vn",
-        }
-        source = discord.FFmpegPCMAudio(proc.stdout, executable=FFMPEG_PATH, pipe=True, **ffmpeg_opts)
-        vol_source = discord.PCMVolumeTransformer(source, volume=self._volume / 100.0)
-        self.vc.play(vol_source, after=lambda e: self._on_track_end_wrapper(e))
-        self._start_time = time.time()
-        self._paused = False
-        self._paused_position = 0.0
-        await self._update_now_playing()
-        self._start_np_updater()
+        self._current_file = file_path
+        try:
+            source = discord.FFmpegPCMAudio(file_path, executable=FFMPEG_PATH)
+            vol_source = discord.PCMVolumeTransformer(source, volume=self._volume / 100.0)
+            self.vc.play(vol_source, after=lambda e: self._on_track_end_wrapper(e))
+            self._start_time = time.time()
+            self._paused = False
+            self._paused_position = 0.0
+            await self._update_now_playing()
+            self._start_np_updater()
+        except Exception as e:
+            print(f"[PLAY ERROR] FFmpeg failed: {e}")
+            await self._play_next()
+
+    async def _update_status(self, text: str):
+        if self._now_playing_msg:
+            try:
+                embed = self._now_playing_msg.embeds[0] if self._now_playing_msg.embeds else None
+                if embed:
+                    new_embed = discord.Embed(
+                        title=text,
+                        color=discord.Color.blue(),
+                    )
+                    await self._now_playing_msg.edit(embed=new_embed)
+            except Exception:
+                pass
+        elif self.home:
+            try:
+                embed = discord.Embed(title=text, color=discord.Color.blue())
+                self._now_playing_msg = await self.home.send(embed=embed)
+            except Exception:
+                pass
 
     def _on_track_end_wrapper(self, error):
         if error:
             print(f"[TRACK END ERROR] {error}")
-        if self._ytdlp_proc:
-            try:
-                self._ytdlp_proc.wait(timeout=3)
-            except Exception:
-                try:
-                    self._ytdlp_proc.kill()
-                    self._ytdlp_proc.wait(timeout=2)
-                except Exception:
-                    pass
-            try:
-                ytdlp_stderr = self._ytdlp_proc.stderr.read().decode("utf-8", errors="replace")
-                if ytdlp_stderr.strip():
-                    print(f"[YT-DLP STDERR] {ytdlp_stderr[:2000]}")
-            except Exception:
-                pass
         asyncio.run_coroutine_threadsafe(self._on_track_end(error), self.vc.client.loop if self.vc and self.vc.client else None)
 
     async def _on_track_end(self, error=None):
-        self._kill_ytdlp()
         await asyncio.sleep(0.3)
         async with self._track_lock:
             if self.loop_mode == "single" and self._single_loop_track:
@@ -406,6 +447,7 @@ class MusicController:
                 self._queue_history.clear()
             if self.queue:
                 next_track = self.queue.pop(0)
+                asyncio.create_task(self._preload_next(next_track))
                 await self.play(next_track)
                 return
             if self.autoplay and self._single_loop_track:
@@ -413,6 +455,7 @@ class MusicController:
                     query = f"ytsearch:{self._single_loop_track.author} mix"
                     results = await YtDlpSearcher.search(query)
                     if results:
+                        asyncio.create_task(self._preload_next(results[0]))
                         await self.play(results[0])
                         return
                 except Exception as e:
@@ -420,61 +463,79 @@ class MusicController:
             self.current_track = None
             self._single_loop_track = None
             self._stop_np_updater()
+            await self._cleanup_current_file()
             await self._update_now_playing()
 
     async def _play_next(self):
         if self.queue:
             next_track = self.queue.pop(0)
+            asyncio.create_task(self._preload_next(next_track))
             await self.play(next_track)
+
+    async def _preload_next(self, track: YtDlpTrack):
+        url = track.webpage_url or track.uri
+        dest = self._cache_path(url)
+        if os.path.isfile(dest):
+            self._preloaded_file = dest
+            self._preloaded_for = url
+            return
+        loop = asyncio.get_event_loop()
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ["yt-dlp", "-f", "bestaudio", "-o", dest, "--no-part", "--no-progress", "--extract-audio", "--audio-format", "opus", url, *YTDLP_COOKIE_ARGS],
+                    capture_output=True, timeout=120,
+                )
+            )
+            if os.path.isfile(dest):
+                self._preloaded_file = dest
+                self._preloaded_for = url
+        except Exception:
+            pass
 
     async def seek(self, position_ms: int):
         if not self.current_track or not self.vc:
             return
         self.vc.stop()
-        self._kill_ytdlp()
 
         url = self.current_track.webpage_url or self.current_track.uri
         position_sec = position_ms / 1000
-        try:
-            proc = await asyncio.to_thread(
-                lambda: subprocess.Popen(
-                    ["yt-dlp", "-f", "bestaudio", "-o", "-", "--no-part", "--no-progress", url],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-            )
-        except Exception as e:
-            if self.home:
-                try:
-                    await self.home.send(f"❌ Gagal seek: {e}")
-                except Exception:
-                    pass
+
+        file_path = self._current_file
+        if not file_path or not os.path.isfile(file_path):
+            file_path = await self._download_track(url)
+        if not file_path or not os.path.isfile(file_path):
             return
 
-        self._ytdlp_proc = proc
-        ffmpeg_opts = {
-            "before_options": f"-ss {position_sec} -noaccurate_seek",
-            "options": "-vn",
-        }
-        source = discord.FFmpegPCMAudio(proc.stdout, executable=FFMPEG_PATH, pipe=True, **ffmpeg_opts)
-        vol_source = discord.PCMVolumeTransformer(source, volume=self._volume / 100.0)
-        self.vc.play(vol_source, after=lambda e: self._on_track_end_wrapper(e))
-        self._start_time = time.time() - position_sec
-        self._paused = False
-        await self._update_now_playing()
-        self._start_np_updater()
+        try:
+            source = discord.FFmpegPCMAudio(
+                file_path, executable=FFMPEG_PATH,
+                before_options=f"-ss {position_sec} -noaccurate_seek",
+            )
+            vol_source = discord.PCMVolumeTransformer(source, volume=self._volume / 100.0)
+            self.vc.play(vol_source, after=lambda e: self._on_track_end_wrapper(e))
+            self._start_time = time.time() - position_sec
+            self._paused = False
+            await self._update_now_playing()
+            self._start_np_updater()
+        except Exception as e:
+            print(f"[SEEK ERROR] {e}")
 
-    def _kill_ytdlp(self):
-        if self._ytdlp_proc:
+    async def _cleanup_current_file(self):
+        if self._current_file and os.path.isfile(self._current_file):
             try:
-                self._ytdlp_proc.kill()
+                os.remove(self._current_file)
             except Exception:
                 pass
+            self._current_file = None
+        if self._preloaded_file and self._preloaded_file != self._current_file:
             try:
-                self._ytdlp_proc.wait(timeout=2)
+                os.remove(self._preloaded_file)
             except Exception:
                 pass
-            self._ytdlp_proc = None
+        self._preloaded_file = None
+        self._preloaded_for = None
 
     async def _cleanup_np(self):
         self._stop_np_updater()
@@ -488,7 +549,7 @@ class MusicController:
             self._now_playing_msg = None
 
     async def stop(self):
-        self._kill_ytdlp()
+        await self._cleanup_current_file()
         await self._cleanup_np()
         self.loop_mode = "off"
         self.autoplay = False
@@ -504,7 +565,7 @@ class MusicController:
                 pass
 
     async def disconnect(self):
-        self._kill_ytdlp()
+        await self._cleanup_current_file()
         await self._cleanup_np()
         if self.vc:
             self.vc.stop()
