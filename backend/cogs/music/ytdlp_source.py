@@ -17,7 +17,9 @@ import yt_dlp
 CACHE_DIR = "/tmp/discord_audio_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-COOKIES_FILE = os.getenv("COOKIES_FILE", "")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_COOKIES_DEFAULT = os.path.join(_PROJECT_ROOT, "cookies", "cookies.txt")
+COOKIES_FILE = os.getenv("COOKIES_FILE", _COOKIES_DEFAULT)
 COOKIES_FROM_BROWSER = os.getenv("COOKIES_FROM_BROWSER", "")
 PO_TOKEN = os.getenv("YOUTUBE_PO_TOKEN", "")
 
@@ -406,6 +408,7 @@ class MusicController:
         self._start_time = 0.0
         self._paused = False
         self._paused_position = 0.0
+        self._pause_reason: str = "none"  # none, manual, alone, mute
         self._last_track_id = None
         self._last_embed_time = 0.0
         self._alone_task = None
@@ -418,6 +421,11 @@ class MusicController:
         self._preloaded_for: Optional[str] = None
         self._now_playing_msg: Optional[discord.Message] = None
         self._np_updater_task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
+        self._recovery_task: Optional[asyncio.Task] = None
+        self._recovery_attempts: int = 0
+        self._stopped: bool = False
+        self._state_file: str = f"/tmp/discord_player_state.json"
 
     def _cache_path(self, url: str) -> str:
         h = hashlib.md5(url.encode()).hexdigest()
@@ -517,11 +525,15 @@ class MusicController:
 
     async def _np_updater_loop(self):
         try:
+            tick = 0
             while True:
                 await asyncio.sleep(10)
+                tick += 1
                 if not self.current_track or (not self.vc.is_playing() and not self.vc.is_paused()):
                     continue
                 await self._update_now_playing()
+                if tick % 3 == 0:
+                    self._save_state()
         except asyncio.CancelledError:
             pass
 
@@ -533,6 +545,174 @@ class MusicController:
         if self._np_updater_task and not self._np_updater_task.done():
             self._np_updater_task.cancel()
             self._np_updater_task = None
+
+    # ==========================================================
+    # WATCHDOG — detect stuck playback (Beatra parity)
+    # ==========================================================
+    def _stop_watchdog(self):
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+            self._watchdog_task = None
+
+    async def _watchdog_loop(self, timeout: float):
+        try:
+            await asyncio.sleep(timeout)
+            print(f"[WATCHDOG] Track stuck for {timeout}s, forcing skip")
+            if self.vc and self.vc.is_playing():
+                self.vc.stop()
+        except asyncio.CancelledError:
+            pass
+
+    def _start_watchdog(self, duration_ms: int):
+        self._stop_watchdog()
+        if duration_ms <= 0:
+            return
+        timeout = (duration_ms / 1000) + 10
+        self._watchdog_task = asyncio.create_task(self._watchdog_loop(timeout))
+
+    # ==========================================================
+    # SEQUENTIAL PRELOAD — preload all queued tracks (Beatra parity)
+    # ==========================================================
+    async def _sequential_preload(self):
+        tracks = list(self.queue[:10])
+        for track in tracks:
+            url = track.webpage_url or track.uri
+            dest = self._cache_path(url)
+            if not os.path.isfile(dest):
+                try:
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(
+                        None,
+                        lambda u=url, d=dest: subprocess.run(
+                            ["yt-dlp", "-f", "bestaudio", "-o", d, "--no-part", "--no-progress", "--extract-audio", "--audio-format", "opus", u, *YTDLP_AUTH_ARGS],
+                            capture_output=True, timeout=120,
+                        )
+                    )
+                except Exception:
+                    pass
+            await asyncio.sleep(0.1)
+
+    # ==========================================================
+    # PAUSE REASONS — manual, alone, mute (Beatra parity)
+    # ==========================================================
+    async def pause_for(self, reason: str = "manual"):
+        if self._paused:
+            return
+        self._paused_position = time.time() - self._start_time
+        self._pause_reason = reason
+        self._paused = True
+        if self.vc and self.vc.is_playing():
+            self.vc.pause()
+        await self._update_now_playing()
+
+    async def resume_for(self, reason: str = "manual"):
+        if not self._paused:
+            return
+        self._pause_reason = "none"
+        self._paused = False
+        self._start_time = time.time() - self._paused_position
+        if self.vc and self.vc.is_paused():
+            self.vc.resume()
+        await self._update_now_playing()
+
+    # ==========================================================
+    # INACTIVITY TIMER — auto-pause when alone (Beatra parity)
+    # ==========================================================
+    async def _alone_pause(self):
+        await asyncio.sleep(30)
+        if not self._paused and self.vc and self.vc.channel:
+            humans = [m for m in self.vc.channel.members if not m.bot]
+            if not humans:
+                await self.pause_for("alone")
+                if self.home:
+                    try:
+                        await self.home.send("⏸️ Auto-paused — no one in voice channel")
+                    except Exception:
+                        pass
+
+    def _start_alone_timer(self):
+        self._stop_alone_timer()
+        self._alone_task = asyncio.create_task(self._alone_pause())
+
+    def _stop_alone_timer(self):
+        if self._alone_task and not self._alone_task.done():
+            self._alone_task.cancel()
+            self._alone_task = None
+
+    def _cancel_alone_timer(self):
+        self._stop_alone_timer()
+
+    # ==========================================================
+    # CONNECTION RECOVERY — auto-reconnect + resume (Beatra parity)
+    # ==========================================================
+    async def _connection_recovery(self, target_channel, max_attempts=3):
+        self._recovery_attempts += 1
+        saved_track = self.current_track
+        saved_position = self.position
+        for attempt in range(max_attempts):
+            try:
+                print(f"[RECOVERY] Attempt {attempt + 1}/{max_attempts}")
+                vc = await target_channel.connect(self_deaf=False)
+                self.vc = vc
+                self._recovery_attempts = 0
+                if saved_track:
+                    await self.play(saved_track)
+                    if saved_position > 3000:
+                        await asyncio.sleep(0.5)
+                        await self.seek(saved_position)
+                return
+            except Exception as e:
+                print(f"[RECOVERY] Attempt {attempt + 1} failed: {e}")
+                await asyncio.sleep(2)
+        self._recovery_attempts = 0
+        await self._cleanup_np()
+
+    # ==========================================================
+    # STATE PERSISTENCE — save/restore player state (Beatra parity)
+    # ==========================================================
+    def _save_state(self):
+        if not self.current_track:
+            return
+        try:
+            state = {
+                "track": {
+                    "title": self.current_track.title,
+                    "uri": self.current_track.webpage_url or self.current_track.uri,
+                    "author": self.current_track.author,
+                    "duration": self.current_track.duration,
+                    "artwork": self.current_track.artwork,
+                },
+                "position_ms": self.position,
+                "paused": self._paused,
+                "volume": self._volume,
+                "loop_mode": self.loop_mode,
+                "autoplay": self.autoplay,
+                "queue": [
+                    {"title": t.title, "uri": t.webpage_url or t.uri,
+                     "author": t.author, "duration": t.duration, "artwork": t.artwork}
+                    for t in self.queue[:20]
+                ],
+            }
+            with open(self._state_file, "w") as f:
+                json.dump(state, f)
+        except Exception as e:
+            print(f"[STATE SAVE ERROR] {e}")
+
+    def _load_state(self) -> Optional[dict]:
+        try:
+            if os.path.isfile(self._state_file):
+                with open(self._state_file) as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"[STATE LOAD ERROR] {e}")
+        return None
+
+    def _clear_state(self):
+        try:
+            if os.path.isfile(self._state_file):
+                os.remove(self._state_file)
+        except Exception:
+            pass
 
     async def play(self, track: YtDlpTrack):
         self.current_track = track
@@ -571,6 +751,10 @@ class MusicController:
             self._start_time = time.time()
             self._paused = False
             self._paused_position = 0.0
+            self._pause_reason = "none"
+            self._stopped = False
+            self._start_watchdog(track.duration)
+            asyncio.create_task(self._sequential_preload())
             await self._update_now_playing()
             self._start_np_updater()
         except Exception as e:
@@ -597,6 +781,8 @@ class MusicController:
         asyncio.run_coroutine_threadsafe(self._on_track_end(error), self.vc.client.loop if self.vc and self.vc.client else None)
 
     async def _on_track_end(self, error=None):
+        self._stop_watchdog()
+        self._save_state()
         await asyncio.sleep(0.3)
         async with self._track_lock:
             if self.loop_mode == "single" and self._single_loop_track:
@@ -624,6 +810,7 @@ class MusicController:
             self._single_loop_track = None
             self._stop_np_updater()
             await self._cleanup_current_file()
+            self._clear_state()
             await self._update_now_playing()
 
     async def _play_next(self):
@@ -677,6 +864,8 @@ class MusicController:
             self.vc.play(vol_source, after=lambda e: self._on_track_end_wrapper(e))
             self._start_time = time.time() - position_sec
             self._paused = False
+            self._pause_reason = "none"
+            self._start_watchdog(self.current_track.duration if self.current_track else 0)
             await self._update_now_playing()
             self._start_np_updater()
         except Exception as e:
@@ -710,6 +899,12 @@ class MusicController:
             self._now_playing_msg = None
 
     async def stop(self):
+        self._stopped = True
+        self._stop_watchdog()
+        if self._recovery_task and not self._recovery_task.done():
+            self._recovery_task.cancel()
+            self._recovery_task = None
+        self._recovery_attempts = 0
         await self._cleanup_current_file()
         await self._cleanup_np()
         self.loop_mode = "off"
@@ -718,6 +913,7 @@ class MusicController:
         self._single_loop_track = None
         self._last_track_id = None
         self.queue.clear()
+        self._clear_state()
         if self.vc:
             self.vc.stop()
             try:
@@ -726,6 +922,13 @@ class MusicController:
                 pass
 
     async def disconnect(self):
+        self._stopped = True
+        self._stop_watchdog()
+        self._clear_state()
+        self._cancel_alone_timer()
+        if self._recovery_task and not self._recovery_task.done():
+            self._recovery_task.cancel()
+            self._recovery_task = None
         await self._cleanup_current_file()
         await self._cleanup_np()
         if self.vc:

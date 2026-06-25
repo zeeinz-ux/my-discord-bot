@@ -173,26 +173,24 @@ class Music(commands.Cog):
         bar = "▬" * filled + "🔘" + "▬" * (length - filled - 1)
         return f"{bar} `{format_duration(current_ms)} / {format_duration(total_ms)}`"
 
-    async def _alone_disconnect(self, controller: MusicController, home: discord.TextChannel | None):
+    async def _alone_pause(self, controller: MusicController, home: discord.TextChannel | None):
         await asyncio.sleep(30)
         if controller and controller.vc and controller.vc.channel:
             humans = [m for m in controller.vc.channel.members if not m.bot]
             if not humans:
                 try:
-                    await controller.disconnect()
+                    await controller.pause_for("alone")
                 except Exception:
                     pass
                 if home:
                     try:
-                        await home.send("👋 Keluar dari voice channel karena tidak ada user.")
+                        await home.send("⏸️ Auto-paused — no one in voice channel")
                     except Exception:
                         pass
 
     def _cancel_alone_task(self, guild_id: int):
         mp = self.get_music_player(guild_id)
-        if mp._alone_task and not mp._alone_task.done():
-            mp._alone_task.cancel()
-            mp._alone_task = None
+        mp._cancel_alone_timer()
 
     # ==========================================================
     # EVENTS
@@ -201,7 +199,22 @@ class Music(commands.Cog):
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         guild_id = member.guild.id
         controller = self.controllers.get(guild_id)
-        if not controller or not controller.vc or not controller.vc.channel:
+        if not controller:
+            return
+
+        # Detect bot disconnect -> start connection recovery
+        if member.id == self.bot.user.id:
+            before_ch = before.channel
+            after_ch = after.channel
+            if before_ch and not after_ch and not controller._stopped:
+                if controller.current_track:
+                    print(f"[RECOVERY] Bot disconnected from {before_ch.name}, attempting recovery")
+                    controller._recovery_task = asyncio.create_task(
+                        controller._connection_recovery(before_ch)
+                    )
+            return
+
+        if not controller.vc or not controller.vc.channel:
             return
 
         vc = controller.vc.channel
@@ -209,9 +222,12 @@ class Music(commands.Cog):
 
         if not humans:
             if controller._alone_task is None or controller._alone_task.done():
-                controller._alone_task = asyncio.create_task(self._alone_disconnect(controller, getattr(controller, 'home', None)))
+                controller._alone_task = asyncio.create_task(self._alone_pause(controller, getattr(controller, 'home', None)))
         else:
             self._cancel_alone_task(guild_id)
+            # Auto-resume if was paused for being alone
+            if controller._pause_reason == "alone":
+                await controller.resume_for("manual")
 
     # ==========================================================
     # COMMANDS

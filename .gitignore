@@ -6,6 +6,12 @@
 serviceAccountKey.json
 *.json.key
 
+# Browser cookies (YouTube auth — sensitive!)
+cookies/
+
+# Reference project (Beatra/MusicBot — not ours)
+MusicBot/
+
 # Lavalink
 backend/lavalink/logs/
 lavalink/logs/
