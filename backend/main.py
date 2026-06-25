@@ -14,8 +14,7 @@ from discord import app_commands
 import time
 import threading
 from dotenv import load_dotenv
-import wavelink
-import asyncio
+
 import importlib
 
 load_dotenv()
@@ -43,27 +42,18 @@ bot.db = firebase_setup.db
 
 @tasks.loop(seconds=20.0)
 async def sync_music_to_dashboard():
-    # 1. Update stats umum (guild count, dll)
+    guilds_list = [
+        {"id": str(g.id), "name": g.name, "member_count": g.member_count or 0}
+        for g in bot.guilds
+    ]
     stats = {
         "online": True,
         "guilds": len(bot.guilds),
         "members": sum(g.member_count for g in bot.guilds),
-        "lavalink_connected": bool(wavelink.Pool.nodes)
+        "lavalink_connected": False,
+        "guilds_list": guilds_list,
     }
     set_stats(stats)
-
-    # 2. Update status musik tiap guild
-    for guild in bot.guilds:
-        player = guild.voice_client
-        if player:
-            state = {
-                "connected": True,
-                "current": player.current.title if player.current else "None",
-                "queue_count": len(player.queue)
-            }
-            set_music_state(str(guild.id), state)
-        else:
-            set_music_state(str(guild.id), {"connected": False})
 
 @bot.event
 async def on_guild_remove(guild):
@@ -79,30 +69,25 @@ async def on_guild_remove(guild):
         "online": True,
         "guilds": len(bot.guilds),
         "members": sum(g.member_count for g in bot.guilds),
-        "lavalink_connected": bool(wavelink.Pool.nodes),
-        "guilds_list": guilds_list,  # <-- CRITICAL: include this
+        "lavalink_connected": False,
+        "guilds_list": guilds_list,
     }
     set_stats(stats)
     await flush_now("stats")
 
-    # 2. Invalidate local cache so get_stats_snapshot() returns fresh data immediately
     invalidate_stats_cache()
 
-    # 3. Remove guild from map-based docs (guild_channels, music_states)
     delete_guild_from_map("guild_channels", guild_id)
     delete_guild_from_map("music_states", guild_id)
 
-    # 4. Recursively delete guild_settings/{guild_id} and subcollections
     await delete_guild_settings(guild_id)
 
     print(f"[DASHBOARD] ✅ Guild removed: {guild.name} ({guild_id}) — stats updated ({len(bot.guilds)} guilds), data cleaned")
 
 @bot.event
 async def on_guild_join(guild):
-    """Immediate stats update + minimal guild_settings init when bot joins a guild."""
     guild_id = str(guild.id)
 
-    # 1. Build COMPLETE stats payload including guilds_list
     guilds_list = [
         {"id": str(g.id), "name": g.name, "member_count": g.member_count or 0}
         for g in bot.guilds
@@ -111,8 +96,8 @@ async def on_guild_join(guild):
         "online": True,
         "guilds": len(bot.guilds),
         "members": sum(g.member_count for g in bot.guilds),
-        "lavalink_connected": bool(wavelink.Pool.nodes),
-        "guilds_list": guilds_list,  # <-- CRITICAL: include this
+        "lavalink_connected": False,
+        "guilds_list": guilds_list,
     }
     set_stats(stats)
     await flush_now("stats")
@@ -137,109 +122,34 @@ set_bot_instance(bot)
 start_time = time.time()
 
 
-# ==========================================================
-# [UPDATE] LAVALINK: PRIVATE COYEB SERVER CONNECTION
-# ==========================================================
-@bot.event
-async def setup_hook():
-    # Mengambil konfigurasi secara aman dari Environment Variables Render
-    lavalink_url = os.getenv("LAVALINK_URL")
-    lavalink_password = os.getenv("LAVALINK_PASSWORD")
 
-    if not lavalink_url or not lavalink_password:
-        print("[LAVALINK] ❌ ERROR: LAVALINK_URL atau LAVALINK_PASSWORD belum diset di Render Dashboard!")
-        print("[LAVALINK] Fitur musik tidak akan berjalan dengan benar.")
-        return
-
-    # Inisialisasi Single Private Node milik lu sendiri
-    node = wavelink.Node(
-        identifier="PrivateLavalink",
-        uri=lavalink_url,
-        password=lavalink_password
-    )
-
-    try:
-        print(f"[LAVALINK] 🔄 Mencoba terhubung ke Private Server: {lavalink_url}...")
-        await asyncio.wait_for(
-            wavelink.Pool.connect(nodes=[node], client=bot),
-            timeout=15.0
-        )
-        print(f"[LAVALINK] ✅ BERHASIL TERHUBUNG: Node private lu siap digunakan!")
-    except asyncio.TimeoutError:
-        print(f"[LAVALINK] ⏱️ Timeout saat mencoba menghubungi server Koyeb.")
-    except Exception as e:
-        print(f"[LAVALINK] ❌ Gagal terkoneksi ke Private Node: {e}")
-
-
-# ==========================================================
-# [UPDATE] Lavalink auto-reconnect loop khusus Private Server
-# ==========================================================
-@tasks.loop(seconds=60)
-async def lavalink_healthcheck():
-    node = wavelink.Pool.nodes.get("PrivateLavalink")
-    if node and node.status == wavelink.NodeStatus.CONNECTED:
-        return
-    
-    print("[LAVALINK] ⚠️ Koneksi terputus, mencoba auto-reconnect ke Private Server...")
-    lavalink_url = os.getenv("LAVALINK_URL")
-    lavalink_password = os.getenv("LAVALINK_PASSWORD")
-    
-    if lavalink_url and lavalink_password:
-        if node:
-            try:
-                await node.disconnect()
-            except Exception:
-                pass
-        
-        node = wavelink.Node(
-            identifier="PrivateLavalink",
-            uri=lavalink_url,
-            password=lavalink_password
-        )
-        try:
-            await wavelink.Pool.connect(nodes=[node], client=bot)
-            print("[LAVALINK] ✅ Auto-reconnect Berhasil!")
-        except Exception as e:
-            print(f"[LAVALINK] ❌ Auto-reconnect Gagal: {e}")
-
-
-@lavalink_healthcheck.before_loop
-async def before_healthcheck():
-    await bot.wait_until_ready()
 
 
 # ===== [DASHBOARD] Stats updater loop =====
 @tasks.loop(seconds=5)
 async def update_stats():
     try:
-        nodes = wavelink.Pool.nodes
-        lavalink_ok = len(nodes) > 0
-        node_uri = "N/A"
-        if nodes:
-            first = list(nodes.values())[0]
-            node_uri = getattr(first, "uri", "Unknown")
-
+        cog = bot.get_cog("Music")
         players = []
-        for guild in bot.guilds:
-            vc = guild.voice_client
-            if vc and getattr(vc, "current", None):
-                ch = getattr(vc, "channel", None)
-                listeners = 0
-                if ch:
-                    listeners = len([m for m in ch.members if not m.bot])
-                players.append({
-                    "guild": guild.name,
-                    "track": vc.current.title,
-                    "author": vc.current.author or "Unknown",
-                    "duration": vc.current.length or 0,
-                    "position": getattr(vc, "position", 0) or 0,
-                    "queue": len(vc.queue) if hasattr(vc, "queue") else 0,
-                    "listeners": listeners,
-                    "paused": getattr(vc, "paused", False),
-                    "artwork": vc.current.artwork or ""
-                })
+        if cog:
+            for guild_id, controller in cog.controllers.items():
+                if controller.current_track and controller.vc:
+                    ch = controller.vc.channel
+                    listeners = 0
+                    if ch:
+                        listeners = len([m for m in ch.members if not m.bot])
+                    players.append({
+                        "guild": controller.guild.name if controller.guild else "Unknown",
+                        "track": controller.current_track.title,
+                        "author": controller.current_track.author or "Unknown",
+                        "duration": controller.current_track.duration or 0,
+                        "position": controller.position,
+                        "queue": len(controller.queue),
+                        "listeners": listeners,
+                        "paused": controller.paused,
+                        "artwork": controller.current_track.artwork or ""
+                    })
 
-        # Sync guild channels untuk dropdown
         for guild in bot.guilds:
             text_channels = [
                 {"id": str(ch.id), "name": ch.name}
@@ -248,7 +158,6 @@ async def update_stats():
             ]
             set_guild_channels(str(guild.id), text_channels)
 
-        # Guilds list untuk sidebar
         guilds_list = [
             {"id": str(g.id), "name": g.name, "member_count": g.member_count or 0}
             for g in bot.guilds
@@ -260,56 +169,54 @@ async def update_stats():
             uptime=int(time.time() - start_time),
             guilds=len(bot.guilds),
             members=sum(g.member_count or 0 for g in bot.guilds),
-            lavalink_connected=lavalink_ok,
-            lavalink_node=node_uri,
+            lavalink_connected=False,
+            lavalink_node="N/A",
             players=players,
             guilds_list=guilds_list
         )
 
-        # Sync music state cache untuk Now Playing API
-        for guild in bot.guilds:
-            vc = guild.voice_client
-            guild_id_str = str(guild.id)
-            if vc and getattr(vc, "current", None):
-                ch = getattr(vc, "channel", None)
-                listeners = 0
-                if ch:
-                    listeners = len([m for m in ch.members if not m.bot])
+        if cog:
+            for guild_id, controller in cog.controllers.items():
+                guild_id_str = str(guild_id)
+                if controller.current_track and controller.vc:
+                    ch = controller.vc.channel
+                    listeners = 0
+                    if ch:
+                        listeners = len([m for m in ch.members if not m.bot])
 
-                queue_list = []
-                queue_total_ms = 0
-                if hasattr(vc, "queue"):
-                    for t in list(vc.queue):
+                    queue_list = []
+                    queue_total_ms = 0
+                    for t in list(controller.queue):
                         queue_list.append({
                             "title": t.title,
                             "author": t.author or "Unknown",
-                            "duration": (t.length or 0) // 1000,
+                            "duration": (t.duration or 0) // 1000,
                             "thumbnail": t.artwork or "",
                             "uri": t.uri or ""
                         })
-                        queue_total_ms += (t.length or 0)
+                        queue_total_ms += (t.duration or 0)
 
-                set_music_state(guild_id_str, {
-                    "connected": True,
-                    "playing": not getattr(vc, "paused", False),
-                    "paused": getattr(vc, "paused", False),
-                    "channel_name": ch.name if ch else "Unknown",
-                    "channel_id": str(ch.id) if ch else None,
-                    "position": (getattr(vc, "position", 0) or 0) // 1000,
-                    "track": {
-                        "title": vc.current.title,
-                        "artist": vc.current.author or "Unknown",
-                        "duration": (vc.current.length or 0) // 1000,
-                        "thumbnail": vc.current.artwork or "",
-                        "uri": vc.current.uri or ""
-                    },
-                    "queue": queue_list,
-                    "queue_count": len(queue_list),
-                    "queue_duration": queue_total_ms // 1000,
-                    "listeners": listeners,
-                })
-            else:
-                set_music_state(guild_id_str, {"connected": False})
+                    set_music_state(guild_id_str, {
+                        "connected": True,
+                        "playing": not controller.paused,
+                        "paused": controller.paused,
+                        "channel_name": ch.name if ch else "Unknown",
+                        "channel_id": str(ch.id) if ch else None,
+                        "position": controller.position // 1000,
+                        "track": {
+                            "title": controller.current_track.title,
+                            "artist": controller.current_track.author or "Unknown",
+                            "duration": (controller.current_track.duration or 0) // 1000,
+                            "thumbnail": controller.current_track.artwork or "",
+                            "uri": controller.current_track.uri or ""
+                        },
+                        "queue": queue_list,
+                        "queue_count": len(queue_list),
+                        "queue_duration": queue_total_ms // 1000,
+                        "listeners": listeners,
+                    })
+                else:
+                    set_music_state(guild_id_str, {"connected": False})
 
     except Exception as e:
         print(f"[DASHBOARD STATS ERROR] {e}")
@@ -363,8 +270,7 @@ async def on_ready():
 
     print(f"[COG] ✅ Total {cog_count} cogs loaded!")
 
-    if not wavelink.Pool.nodes:
-        print("[STATUS] 🎵 Music: Lavalink TIDAK terhubung.")
+    print("[STATUS] 🎵 Music: yt-dlp + FFmpeg mode (no Lavalink)")
 
     try:
         synced = await bot.tree.sync()
@@ -374,12 +280,7 @@ async def on_ready():
     except Exception as e:
         print(f"[SYNC] ❌ Gagal sync commands: {e}")
 
-    # Integrity sweep: clean orphaned guild data from Firestore
     await integrity_sweep(bot)
-
-    if not lavalink_healthcheck.is_running():
-        lavalink_healthcheck.start()
-        print("[LAVALINK] Health check loop aktif (60s).")
 
     if not update_stats.is_running():
         update_stats.start()
@@ -390,14 +291,7 @@ async def on_ready():
 
 @bot.event
 async def on_close():
-    print("[SHUTDOWN] Menutup koneksi Lavalink...")
-    for node in wavelink.Pool.nodes.values():
-        try:
-            await node.disconnect()
-        except Exception:
-            pass
-    await wavelink.Pool.close()
-    print("[SHUTDOWN] Lavalink pool ditutup.")
+    print("[SHUTDOWN] Bot dimatikan.")
 
 
 TOKEN = os.getenv("TOKEN_BOT")
