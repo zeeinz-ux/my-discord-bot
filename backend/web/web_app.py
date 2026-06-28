@@ -148,6 +148,60 @@ def logout():
 
 
 # ==========================================================
+# Spotify OAuth callback — one-time token generator
+# ==========================================================
+
+SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
+
+@app.route("/spotify-callback")
+def spotify_callback():
+    code = request.args.get("code")
+    error = request.args.get("error")
+    if error:
+        return f"<h1>Authorization failed</h1><p>Error: {error}</p>", 400
+    if not code:
+        return "<h1>No authorization code received</h1>", 400
+
+    data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": request.base_url,
+        "client_id": SPOTIFY_CLIENT_ID,
+        "client_secret": SPOTIFY_CLIENT_SECRET,
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    try:
+        resp = requests.post("https://accounts.spotify.com/api/token", data=data, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            return f"<h1>Token exchange failed</h1><p>HTTP {resp.status_code}: {resp.text}</p>", 400
+        token_data = resp.json()
+    except Exception as e:
+        return f"<h1>Token exchange error</h1><p>{e}</p>", 500
+
+    refresh_token = token_data.get("refresh_token", "NOT RETURNED")
+    access_token = token_data.get("access_token", "")
+    scopes = token_data.get("scope", "")
+
+    html = f"""
+    <!DOCTYPE html>
+    <html><head><meta charset="utf-8"><title>Spotify Token</title>
+    <style>body{{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 20px}}
+    code{{background:#eee;padding:8px 12px;border-radius:4px;display:block;word-break:break-all;font-size:14px}}
+    .success{{color:#1DB954;font-size:24px;font-weight:bold}}</style></head>
+    <body>
+    <h1 class="success">Authorization successful!</h1>
+    <p>Add this to your <code>.env</code> or Railway secrets:</p>
+    <code>SPOTIFY_USER_REFRESH_TOKEN={refresh_token}</code>
+    <p style="margin-top:24px">Scopes granted: <code>{scopes}</code></p>
+    {"<p><small>Access token: " + access_token[:20] + "... (auto-refreshes, not needed)</small></p>" if access_token else ""}
+    <p><small>You can close this tab.</small></p>
+    </body></html>
+    """
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+# ==========================================================
 # API — Music
 # ==========================================================
 

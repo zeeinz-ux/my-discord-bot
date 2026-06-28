@@ -6,7 +6,6 @@ import time
 import os
 import random
 import re
-import json
 import logging
 import sys
 from typing import Optional
@@ -22,7 +21,7 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 from backend.utils.formatters import format_duration
-from backend.cogs.music.spotify_down import SpotifyResolver, ResolvedTrack
+from backend.cogs.music.spotify_down import SpotifyResolver, ResolvedTrack, _extract_tracks_from_scripts
 
 from backend.cogs.music.ytdlp_source import YtDlpTrack, YtDlpPlaylist, YtDlpSearcher, MusicController, _web_search_youtube
 
@@ -35,124 +34,6 @@ def get_db():
         return None
 
 
-def _find_spotify_tracks_in_json(data, depth=0):
-    """Recursively search parsed JSON for track-like entries."""
-    if depth > 8:
-        return []
-    results = []
-
-    if isinstance(data, dict):
-        # Direct trackList key (covers SD-like format)
-        tl = data.get('trackList') or data.get('tracks')
-        if isinstance(tl, list) and len(tl) >= 1:
-            for t in tl:
-                tid = t.get('id') or t.get('uri', '').split(':')[-1] if isinstance(t.get('uri'), str) else ''
-                title = t.get('title') or t.get('name') or ''
-                artist = t.get('artist') or t.get('artists') or ''
-                if isinstance(artist, list):
-                    artist = ', '.join(
-                        a.get('name', '') if isinstance(a, dict) else str(a) for a in artist
-                    )
-                cover = t.get('cover') or t.get('artwork') or ''
-                if isinstance(cover, list):
-                    cover = cover[0].get('url', '') if cover else ''
-                duration = t.get('duration_ms') or t.get('duration')
-                if tid or title:
-                    results.append((tid, title, artist, cover, duration))
-
-        # Spotify items in entity
-        items = data.get('items')
-        if isinstance(items, list) and len(items) >= 1:
-            for it in items:
-                if isinstance(it, dict) and 'track' in it:
-                    t = it['track']
-                    if isinstance(t, dict) and t.get('id'):
-                        artists = ', '.join(a['name'] for a in t.get('artists', []) if isinstance(a, dict))
-                        images = t.get('album', {}).get('images', [])
-                        cover = images[0].get('url', '') if images else ''
-                        results.append((
-                            t['id'], t.get('name', ''),
-                            artists, cover,
-                            t.get('duration_ms'),
-                        ))
-
-        # Recurse into all values
-        for v in data.values():
-            results.extend(_find_spotify_tracks_in_json(v, depth + 1))
-
-    elif isinstance(data, list):
-        # Try items directly
-        if len(data) > 1:
-            for it in data:
-                if isinstance(it, dict) and ('track' in it or 'id' in it):
-                    t = it.get('track') or it
-                    if isinstance(t, dict) and (t.get('id') or t.get('name')):
-                        tid = t.get('id') or ''
-                        title = t.get('name') or ''
-                        artist_v = t.get('artist') or t.get('artists') or ''
-                        if isinstance(artist_v, list):
-                            artist_v = ', '.join(
-                                a.get('name', '') if isinstance(a, dict) else str(a) for a in artist_v
-                            )
-                        cover = ''
-                        albums = t.get('album')
-                        if isinstance(albums, dict):
-                            imgs = albums.get('images', [])
-                            cover = imgs[0].get('url', '') if imgs else ''
-                        results.append((
-                            tid, title, artist_v, cover,
-                            t.get('duration_ms'),
-                        ))
-                    break
-        for item in data:
-            results.extend(_find_spotify_tracks_in_json(item, depth + 1))
-
-    return results
-
-
-def _extract_tracks_from_scripts(script_contents):
-    """Try to parse React state JSON from Spotify script tags."""
-    known_vars = [
-        'window.__INITIAL_STATE__',
-        'window.__PRELOADED_STATE__',
-        'window.__remixContext',
-        'window.__spotify__',
-        'window.__data__',
-        'window.__STORE__',
-    ]
-
-    for content in script_contents:
-        content = content.strip()
-
-        # Try known variable patterns
-        for var in known_vars:
-            escaped_var = re.escape(var)
-            m = re.search(rf'{escaped_var}\s*=\s*(\S.*)', content, re.DOTALL)
-            if m:
-                raw = m.group(1).rstrip(';').strip()
-                try:
-                    decoder = json.JSONDecoder()
-                    data, _ = decoder.raw_decode(raw)
-                    tracks = _find_spotify_tracks_in_json(data)
-                    if len(tracks) >= 1:
-                        return tracks
-                except (json.JSONDecodeError, ValueError, StopIteration):
-                    continue
-
-        # Try parsing whole content as JSON
-        if content.startswith('{') or content.startswith('['):
-            try:
-                decoder = json.JSONDecoder()
-                data, _ = decoder.raw_decode(content)
-                tracks = _find_spotify_tracks_in_json(data)
-                if len(tracks) >= 1:
-                    return tracks
-            except (json.JSONDecodeError, ValueError, StopIteration):
-                continue
-
-    return []
-
-
 class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -162,8 +43,10 @@ class Music(commands.Cog):
         self.spotify = SpotifyResolver(
             fallback_client_id=os.getenv("SPOTIFY_CLIENT_ID"),
             fallback_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET"),
+            user_refresh_token=os.getenv("SPOTIFY_USER_REFRESH_TOKEN"),
         )
-        logger.info("[SPOTIFY] SpotifyDown API resolver aktif (fallback: Official API)")
+        logger.info("[SPOTIFY] Spotify resolver aktif (%s)",
+                     "User OAuth2" if os.getenv("SPOTIFY_USER_REFRESH_TOKEN") else "Client Credentials")
         logger.info(f"[DEBUG SPOTIFY] Client ID Terdeteksi: {os.getenv('SPOTIFY_CLIENT_ID')[:5]}***" if os.getenv('SPOTIFY_CLIENT_ID') else "[DEBUG SPOTIFY] Client ID TIDAK DITEMUKAN!")
 
     async def _get_session(self) -> aiohttp.ClientSession:
