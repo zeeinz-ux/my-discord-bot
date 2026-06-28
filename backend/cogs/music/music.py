@@ -571,7 +571,7 @@ class Music(commands.Cog):
         controller._paused = True
         controller._paused_position = time.time() - controller._start_time
         await controller._update_now_playing()
-        await ctx.send("⏸️ Lagu di-pause.")
+        await ctx.send("⏸️ Pause")
 
     @commands.hybrid_command(name="resume", description="Lanjutkan lagu yang di-pause")
     async def resume(self, ctx: commands.Context):
@@ -586,7 +586,7 @@ class Music(commands.Cog):
         controller._paused = False
         controller._start_time = time.time() - controller._paused_position
         await controller._update_now_playing()
-        await ctx.send("▶️ Lagu dilanjutkan.")
+        await ctx.send("▶️ Resume")
 
     @commands.hybrid_command(name="skip", description="Skip ke lagu berikutnya")
     async def skip(self, ctx: commands.Context):
