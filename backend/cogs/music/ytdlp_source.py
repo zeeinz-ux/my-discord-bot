@@ -412,6 +412,40 @@ class YtDlpSearcher:
         return tracks
 
     @staticmethod
+    def _extract_video_id(url: str) -> Optional[str]:
+        m = re.search(r'(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})', url)
+        return m.group(1) if m else None
+
+    @staticmethod
+    async def _yt_video_details(video_id: str) -> Optional[dict]:
+        api_key = os.getenv("YOUTUBE_API_KEY", "")
+        if not api_key:
+            return None
+        try:
+            async with aiohttp.ClientSession() as session:
+                params = {"part": "snippet,contentDetails", "id": video_id, "key": api_key}
+                async with session.get("https://www.googleapis.com/youtube/v3/videos",
+                                       params=params,
+                                       timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+                    items = data.get("items", [])
+                    if not items:
+                        return None
+                    item = items[0]
+                    snip = item.get("snippet", {})
+                    cd = item.get("contentDetails", {})
+                    return {
+                        "title": snip.get("title", "Unknown"),
+                        "author": snip.get("channelTitle", "Unknown"),
+                        "duration": YtDlpSearcher._parse_iso8601_duration(cd.get("duration", "")),
+                        "thumbnail": snip.get("thumbnails", {}).get("high", {}).get("url", ""),
+                    }
+        except Exception:
+            return None
+
+    @staticmethod
     async def extract_info(url: str) -> Optional[YtDlpTrack]:
         cache_key = f"info:{url}"
         cached = YtDlpSearcher._cache.get(cache_key)
@@ -419,18 +453,35 @@ class YtDlpSearcher:
             return cached["track"]
 
         loop = asyncio.get_event_loop()
+        info = None
         try:
             info = await loop.run_in_executor(
                 None,
                 lambda: yt_dlp.YoutubeDL(YTDL_OPTS).extract_info(url, download=False)
             )
         except Exception:
-            return None
+            pass
 
         if info:
             track = YtDlpTrack.from_info(info)
             YtDlpSearcher._cache[cache_key] = {"ts": time.time(), "track": track}
             return track
+
+        # Fallback: YouTube videos.list (1 unit quota)
+        vid = YtDlpSearcher._extract_video_id(url)
+        if vid:
+            details = await YtDlpSearcher._yt_video_details(vid)
+            if details:
+                track = YtDlpTrack(
+                    title=details["title"],
+                    uri=url,
+                    author=details["author"],
+                    duration=details["duration"],
+                    artwork=details["thumbnail"],
+                    webpage_url=url,
+                )
+                YtDlpSearcher._cache[cache_key] = {"ts": time.time(), "track": track}
+                return track
         return None
 
     @staticmethod
@@ -644,6 +695,8 @@ class MusicController:
         dest = self._cache_path(url)
         if os.path.isfile(dest):
             return dest
+
+        # Try 1: yt-dlp CLI
         try:
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
@@ -653,25 +706,49 @@ class MusicController:
                     capture_output=True, timeout=120,
                 )
             )
-            if result.returncode != 0:
-                stderr = result.stderr.decode(errors="replace")[:500] if result.stderr else ""
-                print(f"[DOWNLOAD ERROR] yt-dlp exited {result.returncode} for {url[:60]}: {stderr}")
-                return None
-            if os.path.isfile(dest):
+            if result.returncode == 0 and os.path.isfile(dest):
                 return dest
-            import glob as _glob
-            prefix = dest.rsplit(".", 1)[0]
-            matches = _glob.glob(prefix + ".*")
-            if matches:
-                print(f"[DOWNLOAD] yt-dlp wrote to {matches[0]} instead of {dest}")
-                os.rename(matches[0], dest)
-                return dest if os.path.isfile(dest) else None
-            stderr = result.stderr.decode(errors="replace")[:500] if result.stderr else ""
-            print(f"[DOWNLOAD ERROR] File not found at {dest} or any {prefix}.* variant. stderr: {stderr}")
-            return None
+            if result.returncode == 0:
+                import glob as _glob
+                prefix = dest.rsplit(".", 1)[0]
+                matches = _glob.glob(prefix + ".*")
+                if matches:
+                    os.rename(matches[0], dest)
+                    if os.path.isfile(dest):
+                        return dest
+        except Exception:
+            pass
+
+        # Try 2: Cobalt API (bypasses YouTube bot detection entirely)
+        print(f"[DOWNLOAD] yt-dlp failed for {url[:60]}, trying Cobalt API...")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.cobalt.tools/api/json",
+                    json={"url": url, "aFormat": "mp3", "isAudioOnly": True, "vQuality": "max"},
+                    headers={"Content-Type": "application/json", "Accept": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        stream_url = data.get("url")
+                        if stream_url:
+                            print(f"[DOWNLOAD] Cobalt got stream URL, downloading to {dest}...")
+                            async with session.get(stream_url, timeout=aiohttp.ClientTimeout(total=120)) as sr:
+                                if sr.status == 200:
+                                    with open(dest, "wb") as f:
+                                        while True:
+                                            chunk = await sr.content.read(65536)
+                                            if not chunk:
+                                                break
+                                            f.write(chunk)
+                                    if os.path.isfile(dest):
+                                        print(f"[DOWNLOAD] Cobalt download OK: {dest}")
+                                        return dest
         except Exception as e:
-            print(f"[DOWNLOAD ERROR] {url[:60]}: {e}")
-            return None
+            print(f"[DOWNLOAD] Cobalt failed for {url[:60]}: {e}")
+
+        return None
 
     @property
     def channel(self):
