@@ -190,7 +190,10 @@ class YtDlpSearcher:
         if cached and (time.time() - cached["ts"]) < YtDlpSearcher._CACHE_TTL:
             return cached["tracks"]
 
-        if query.startswith("ytsearch:"):
+        if query.startswith("ytmsearch:"):
+            raw_query = query[len("ytmsearch:"):].strip()
+            actual_query = f"ytmsearch5:{raw_query}"
+        elif query.startswith("ytsearch:"):
             raw_query = query[len("ytsearch:"):].strip()
             actual_query = f"ytsearch5:{raw_query}"
         else:
