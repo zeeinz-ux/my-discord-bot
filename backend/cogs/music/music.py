@@ -161,17 +161,20 @@ class Music(commands.Cog):
             logger.info(f"[YOUTUBE SEARCH] All yt-dlp search failed for: {lbl}, coba web scrape...")
             try:
                 session = await self._get_session()
-                video_url = await asyncio.wait_for(
+                video_urls = await asyncio.wait_for(
                     _web_search_youtube(session, (name or query)),
                     timeout=10.0,
                 )
-                if video_url:
-                    result = await asyncio.wait_for(
-                        YtDlpSearcher.extract_info(video_url),
-                        timeout=15.0,
-                    )
-                    if result:
-                        return result
+                for vu in video_urls:
+                    try:
+                        result = await asyncio.wait_for(
+                            YtDlpSearcher.extract_info(vu),
+                            timeout=15.0,
+                        )
+                        if result:
+                            return result
+                    except Exception:
+                        continue
             except (asyncio.TimeoutError, Exception):
                 pass
             logger.info(f"[YOUTUBE SEARCH] Web scrape also failed for: {artists} - {name}")

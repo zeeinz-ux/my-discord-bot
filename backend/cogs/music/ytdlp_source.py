@@ -186,8 +186,8 @@ class YtDlpPlaylist:
     tracks: list
 
 
-async def _web_search_youtube(session, query: str) -> Optional[str]:
-    """Web scrape YouTube search as fallback when yt-dlp search times out."""
+async def _web_search_youtube(session, query: str) -> list:
+    """Web scrape YouTube search — return up to 5 video IDs."""
     from urllib.parse import quote
 
     url = f"https://www.youtube.com/results?search_query={quote(query)}"
@@ -198,15 +198,21 @@ async def _web_search_youtube(session, query: str) -> Optional[str]:
     try:
         async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             if resp.status != 200:
-                return None
+                return []
             html = await resp.text()
-            # Extract first video ID from ytInitialData or direct HTML
-            m = re.search(r'/watch\?v=([a-zA-Z0-9_-]{11})', html)
-            if m:
-                return f"https://youtube.com/watch?v={m.group(1)}"
+            ids = re.findall(r'/watch\?v=([a-zA-Z0-9_-]{11})', html)
+            seen = set()
+            unique = []
+            for vid in ids:
+                if vid not in seen:
+                    seen.add(vid)
+                    unique.append(f"https://youtube.com/watch?v={vid}")
+                    if len(unique) >= 5:
+                        break
+            return unique
     except Exception:
         pass
-    return None
+    return []
 
 
 class YtDlpSearcher:
