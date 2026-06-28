@@ -20,6 +20,9 @@ if not logger.handlers:
     logger.addHandler(_h)
     logger.setLevel(logging.INFO)
 
+# Batas maksimum penarikan lagu dalam satu batch playlist (YouTube & Spotify)
+MAX_BATCH = 100
+
 from backend.utils.formatters import format_duration
 from backend.cogs.music.spotify_down import SpotifyResolver, ResolvedTrack, _extract_tracks_from_scripts
 
@@ -175,6 +178,15 @@ class Music(commands.Cog):
                             return result
                     except Exception:
                         continue
+                # Fallback: create track from URL directly (no metadata needed for playback)
+                if video_urls:
+                    track = YtDlpTrack(
+                        title=name or query,
+                        uri=video_urls[0],
+                        webpage_url=video_urls[0],
+                    )
+                    logger.info(f"[YOUTUBE SEARCH] Web scrape fallback track: {video_urls[0][:40]}")
+                    return track
             except (asyncio.TimeoutError, Exception):
                 pass
             logger.info(f"[YOUTUBE SEARCH] Web scrape also failed for: {artists} - {name}")
@@ -589,7 +601,6 @@ class Music(commands.Cog):
                 controller._playlist_tracks = resolved_tracks  # all tracks
                 controller._playlist_index = 0
                 controller._playlist_total = original_total_tracks
-                MAX_BATCH = 30
                 batch = resolved_tracks[:MAX_BATCH]
                 total_tracks = len(batch)
                 resolved_tracks = batch
