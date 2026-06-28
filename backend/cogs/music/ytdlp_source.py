@@ -210,6 +210,19 @@ class YtDlpSearcher:
 
     @staticmethod
     @staticmethod
+    def _parse_iso8601_duration(duration_str: str) -> int:
+        """Convert ISO 8601 duration (PT4M36S) to milliseconds."""
+        if not duration_str:
+            return 0
+        match = re.match(r'PT?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration_str)
+        if not match:
+            return 0
+        hours = int(match.group(1) or 0)
+        minutes = int(match.group(2) or 0)
+        seconds = int(match.group(3) or 0)
+        return (hours * 3600 + minutes * 60 + seconds) * 1000
+
+    @staticmethod
     async def _youtube_api_search(raw_query: str) -> list:
         api_key = os.getenv("YOUTUBE_API_KEY", "")
         if not api_key:
@@ -236,20 +249,56 @@ class YtDlpSearcher:
             finally:
                 await session.close()
 
+            video_ids = []
+            items = data.get("items", [])
+            for item in items:
+                vid = item.get("id", {}).get("videoId", "")
+                if vid:
+                    video_ids.append(vid)
+
+            # Fetch durations in batch
+            durations: dict = {}
+            if video_ids:
+                try:
+                    session2 = aiohttp.ClientSession()
+                    try:
+                        params2 = {
+                            "part": "contentDetails",
+                            "id": ",".join(video_ids),
+                            "key": api_key,
+                        }
+                        async with session2.get(
+                            "https://www.googleapis.com/youtube/v3/videos",
+                            params=params2,
+                            timeout=aiohttp.ClientTimeout(total=5),
+                        ) as resp2:
+                            if resp2.status == 200:
+                                dur_data = await resp2.json()
+                                for d_item in dur_data.get("items", []):
+                                    dur_vid = d_item.get("id", "")
+                                    content = d_item.get("contentDetails", {})
+                                    if dur_vid:
+                                        durations[dur_vid] = YtDlpSearcher._parse_iso8601_duration(
+                                            content.get("duration", "")
+                                        )
+                    finally:
+                        await session2.close()
+                except Exception:
+                    pass
+
             tracks = []
-            for item in data.get("items", []):
+            for item in items:
                 vid = item.get("id", {}).get("videoId", "")
                 snippet = item.get("snippet", {})
                 if not vid:
                     continue
                 title = snippet.get("title", "Unknown")
                 author = snippet.get("channelTitle", "Unknown")
-                duration = snippet.get("duration", 0)
                 track = YtDlpTrack(
                     uri=f"https://www.youtube.com/watch?v={vid}",
                     title=title,
                     author=author,
-                    duration=duration,
+                    duration=durations.get(vid, 0),
                     artwork=snippet.get("thumbnails", {}).get("high", {}).get("url", ""),
                 )
                 tracks.append(track)
