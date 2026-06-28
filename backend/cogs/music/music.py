@@ -131,12 +131,9 @@ class Music(commands.Cog):
 
             search_variations = []
 
-            # 1. Artist + Title (most specific — saves API quota)
-            if has_artist and name:
-                search_variations.append(f"ytmsearch:{artists} - {name}")
-
-            # 2. Title only (when artist is Unknown or specific query fails)
-            search_variations.append(f"ytmsearch:{name or query}")
+            # Only 1 search per track to save YouTube API quota (100 units each, 10k/day limit)
+            search_query = f"{artists} - {name}" if has_artist and name else (name or query)
+            search_variations.append(f"ytmsearch:{search_query}")
 
             attempted = set()
             for sq in search_variations:
