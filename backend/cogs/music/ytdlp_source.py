@@ -42,20 +42,21 @@ if PO_TOKEN:
 elif COOKIES_FROM_BROWSER:
     _YTDLP_AUTH = ["--cookies-from-browser", COOKIES_FROM_BROWSER]
 else:
-    _YTDLP_AUTH = ["--extractor-args", "youtube:player_client=android;player_skip=webpage"]
+    _YTDLP_AUTH = ["--extractor-args", "youtube:player_client=web;js_runner=deno",
+                   "--throttled-rate", "100"]
 
 YTDLP_AUTH_ARGS = _YTDLP_BASE + _YTDLP_AUTH
 
 # Auth opts for yt-dlp Python library
 def _get_ytdlp_auth_opts() -> dict:
-    opts = {"retries": 3, "fragment_retries": 3}
+    opts = {"retries": 3, "fragment_retries": 3, "throttledratelimit": 100}
     if PO_TOKEN:
         opts["extractor_args"] = {"youtube": [f"po_token=web+{PO_TOKEN}", "player_client=web"]}
     elif COOKIES_FROM_BROWSER:
         opts["cookiefile"] = None
         opts["cookiesfrombrowser"] = (COOKIES_FROM_BROWSER,)
     else:
-        opts["extractor_args"] = {"youtube": ["player_client=android", "player_skip=webpage"]}
+        opts["extractor_args"] = {"youtube": ["player_client=web", "js_runner=deno"]}
     return opts
 
 warnings.filterwarnings("ignore", message=".*line buffering.*binary mode.*")
@@ -227,11 +228,47 @@ class YtDlpSearcher:
         return (hours * 3600 + minutes * 60 + seconds) * 1000
 
     @staticmethod
+    def _yt_api_cache_path(query: str) -> str:
+        h = hashlib.md5(query.encode()).hexdigest()
+        return f"/tmp/yt_api_cache_{h}.json"
+
+    @staticmethod
+    def _yt_api_cache_read(query: str) -> Optional[list]:
+        path = YtDlpSearcher._yt_api_cache_path(query)
+        try:
+            if os.path.isfile(path) and (time.time() - os.path.getmtime(path)) < 82800:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    tracks = [YtDlpTrack(**t) for t in data]
+                    if tracks:
+                        logger.info(f"[YT API CACHE] Cache hit for q={query} ({len(tracks)} tracks)")
+                        return tracks
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _yt_api_cache_write(query: str, tracks: list):
+        path = YtDlpSearcher._yt_api_cache_path(query)
+        try:
+            data = [{"title": t.title, "uri": t.uri, "author": t.author,
+                     "duration": t.duration, "artwork": t.artwork} for t in tracks]
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except Exception:
+            pass
+
+    @staticmethod
     async def _youtube_api_search(raw_query: str) -> list:
         api_key = os.getenv("YOUTUBE_API_KEY", "")
         if not api_key:
             logger.warning("[YT API] YOUTUBE_API_KEY not set — skipping YouTube API search")
             return []
+
+        cached = YtDlpSearcher._yt_api_cache_read(raw_query)
+        if cached is not None:
+            return cached
+
         try:
             session = aiohttp.ClientSession()
             try:
@@ -313,6 +350,7 @@ class YtDlpSearcher:
                 )
                 tracks.append(track)
             logger.info(f"[YT API] Returning {len(tracks)} tracks for q={raw_query}")
+            YtDlpSearcher._yt_api_cache_write(raw_query, tracks)
             return tracks
         except Exception as e:
             logger.warning(f"[YT API] Exception for q={raw_query}: {e}")

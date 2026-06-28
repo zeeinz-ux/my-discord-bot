@@ -131,17 +131,12 @@ class Music(commands.Cog):
 
             search_variations = []
 
-            # 1. Title only (most reliable when artist is Unknown)
-            search_variations.append(f"ytmsearch:{query}")
-
-            # 2. Artist + Title (only if we have a real artist)
+            # 1. Artist + Title (most specific — saves API quota)
             if has_artist and name:
                 search_variations.append(f"ytmsearch:{artists} - {name}")
 
-            # 3. Official audio / music video (only with real artist)
-            if has_artist and name:
-                search_variations.append(f"ytmsearch:{artists} - {name} official audio")
-                search_variations.append(f"ytmsearch:{artists} - {name} music video")
+            # 2. Title only (when artist is Unknown or specific query fails)
+            search_variations.append(f"ytmsearch:{name or query}")
 
             attempted = set()
             for sq in search_variations:
@@ -164,17 +159,6 @@ class Music(commands.Cog):
                     dur_diff = abs((r.duration or 0) - (target_dur or 0)) if target_dur else 0
                     if score > 0.15 or not target_dur or dur_diff < 10000:
                         return r
-
-            # Fallback: ytmsearch title-only, return whatever
-            try:
-                results = await asyncio.wait_for(
-                    YtDlpSearcher.search(f"ytmsearch:{name or query}"),
-                    timeout=15.0,
-                )
-                if results:
-                    return results[0]
-            except (asyncio.TimeoutError, Exception):
-                pass
 
             lbl = f"{artists} - {name}" if has_artist else name
             logger.info(f"[YOUTUBE SEARCH] All yt-dlp search failed for: {lbl}, coba web scrape...")
