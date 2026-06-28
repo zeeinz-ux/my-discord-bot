@@ -397,6 +397,17 @@ class Music(commands.Cog):
             # PLAYLIST / ALBUM
             else:
                 original_total_tracks = len(resolved_tracks)
+
+                if original_total_tracks <= 1 and source in ("oembed", "html_scrape"):
+                    await loading_msg.edit(
+                        content=(
+                            "❌ Gagal mengambil daftar lagu dari Spotify.\n"
+                            "SpotifyDown API sedang down dan Official API juga gagal.\n"
+                            "Coba link langsung YouTube atau coba lagi nanti."
+                        )
+                    )
+                    return
+
                 # Simpen semua resolved tracks buat auto-load nanti
                 controller._playlist_url = search_query
                 controller._playlist_tracks = resolved_tracks  # all tracks

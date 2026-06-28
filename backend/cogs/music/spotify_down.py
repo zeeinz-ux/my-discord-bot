@@ -219,6 +219,7 @@ class SpotifyOfficialClient:
     async def _fetch_paginated(self, session: aiohttp.ClientSession, url: str, limit: int = 50) -> List[Dict]:
         token = await self._get_token(session)
         if not token:
+            logger.error("[SPOTIFY OFFICIAL] No token — skipping fetch: %s", url.split("?")[0])
             return []
 
         items: List[Dict] = []
@@ -233,12 +234,14 @@ class SpotifyOfficialClient:
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     if resp.status == 401:
+                        logger.warning("[SPOTIFY OFFICIAL] 401 — refreshing token")
                         self._token = None
                         token = await self._get_token(session)
                         if not token:
                             break
                         continue
                     if resp.status != 200:
+                        logger.error("[SPOTIFY OFFICIAL] %s on %s", resp.status, url.split("?")[0])
                         break
                     data = await resp.json()
                     items.extend(data.get("items", []))
@@ -246,7 +249,11 @@ class SpotifyOfficialClient:
                         return items[:100]
                     url = data.get("next")
                     params = {}
-            except Exception:
+            except asyncio.TimeoutError:
+                logger.error("[SPOTIFY OFFICIAL] Timeout fetching: %s", url.split("?")[0])
+                break
+            except Exception as e:
+                logger.error("[SPOTIFY OFFICIAL] Exception: %s", e)
                 break
         return items
 
