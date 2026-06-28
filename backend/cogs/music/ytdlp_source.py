@@ -35,7 +35,7 @@ elif COOKIES_FROM_BROWSER:
 elif COOKIES_FILE and os.path.isfile(COOKIES_FILE):
     _YTDLP_AUTH = ["--cookies", COOKIES_FILE]
 else:
-    _YTDLP_AUTH = ["--no-update"]
+    _YTDLP_AUTH = ["--extractor-args", "youtube:player_client=android"]
 
 YTDLP_AUTH_ARGS = _YTDLP_BASE + _YTDLP_AUTH
 
@@ -50,7 +50,7 @@ def _get_ytdlp_auth_opts() -> dict:
     elif COOKIES_FILE:
         opts["cookiefile"] = COOKIES_FILE
     else:
-        opts["extractor_args"] = {"youtube": ["player_client=web"]}
+        opts["extractor_args"] = {"youtube": ["player_client=android"]}
     return opts
 
 warnings.filterwarnings("ignore", message=".*line buffering.*binary mode.*")
