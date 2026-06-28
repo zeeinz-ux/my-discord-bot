@@ -116,15 +116,29 @@ FFMPEG_PATH = _find_ffmpeg()
 _AUTH_OPTS = _get_ytdlp_auth_opts()
 
 YTDL_OPTS = {
-    "format": "bestaudio/best", "quiet": True, "no_warnings": True,
-    "extract_flat": False, "noplaylist": True, "socket_timeout": 10,
-    "retries": 1, **_AUTH_OPTS,
+    "format": "bestaudio/best", 
+    "quiet": True, 
+    "no_warnings": True,
+    "extract_flat": False, 
+    "noplaylist": True, 
+    "socket_timeout": 10,
+    "retries": 1, 
+    "proxy": os.getenv("YTDLP_PROXY"), # TAMBAHKAN INI
+    **_AUTH_OPTS,
 }
 
+# Ubah YTDL_SEARCH_OPTS jadi begini:
 YTDL_SEARCH_OPTS = {
-    "format": "bestaudio/best", "quiet": True, "no_warnings": True,
-    "default_search": "ytsearch", "extract_flat": "in_playlist",
-    "noplaylist": False, "socket_timeout": 10, "retries": 1, **_AUTH_OPTS,
+    "format": "bestaudio/best", 
+    "quiet": True, 
+    "no_warnings": True,
+    "default_search": "ytsearch", 
+    "extract_flat": "in_playlist",
+    "noplaylist": False, 
+    "socket_timeout": 10, 
+    "retries": 1, 
+    "proxy": os.getenv("YTDLP_PROXY"), # TAMBAHKAN INI
+    **_AUTH_OPTS,
 }
 
 YTDL_PLAYLIST_OPTS = {
