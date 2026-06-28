@@ -689,7 +689,7 @@ class SpotifyResolver:
     ) -> List[ResolvedTrack]:
         """
         Best-effort scrape:
-        - download public Spotify page HTML
+        - download public Spotify page HTML (tries multiple URL formats)
         - collect track IDs
         - resolve each track via track oEmbed
         """
@@ -698,24 +698,45 @@ class SpotifyResolver:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
         }
-        try:
-            async with session.get(
-                page_url,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=15),
-                allow_redirects=True,
-            ) as resp:
-                if resp.status != 200:
-                    logger.warning("[SPOTIFY SCRAPE] %s page returned HTTP %s", container_name, resp.status)
-                    return []
 
-                html = await resp.text()
-                logger.info("[SPOTIFY SCRAPE] %s page fetched OK (%d bytes)", container_name, len(html))
-        except asyncio.TimeoutError:
-            logger.error("[SPOTIFY SCRAPE] Timeout fetching %s page", container_name)
+        # Try multiple URL formats (original, embed, locale) to bypass blocking
+        candidate_urls = [page_url]
+        if container_name in ("playlist", "album") and container_id:
+            candidate_urls.append(f"https://open.spotify.com/embed/{container_name}/{container_id}")
+            candidate_urls.append(f"https://open.spotify.com/intl/en/{container_name}/{container_id}")
+
+        html = None
+        for attempt_url in candidate_urls:
+            try:
+                async with session.get(
+                    attempt_url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=12),
+                    allow_redirects=True,
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning("[SPOTIFY SCRAPE] %s page returned HTTP %s on %s", container_name, resp.status, attempt_url)
+                        continue
+                    html = await resp.text()
+                    logger.info("[SPOTIFY SCRAPE] %s page fetched OK (%d bytes) from %s", container_name, len(html), attempt_url)
+                    if len(html) >= 2000:
+                        break
+                    logger.info("[SPOTIFY SCRAPE] Page too small (%d bytes), trying next URL...", len(html))
+                    html = None
+                    continue
+            except asyncio.TimeoutError:
+                logger.error("[SPOTIFY SCRAPE] Timeout fetching %s from %s", container_name, attempt_url)
+                continue
+            except Exception as e:
+                logger.error("[SPOTIFY SCRAPE] Failed to fetch %s from %s: %s", container_name, attempt_url, e)
+                continue
+
+        if html is None:
+            logger.warning("[SPOTIFY SCRAPE] All URL formats failed for %s", container_name)
             return []
-        except Exception as e:
-            logger.error("[SPOTIFY SCRAPE] Failed to fetch %s page: %s", container_name, e)
+
+        if len(html) < 2000:
+            logger.warning("[SPOTIFY SCRAPE] Page too small (%d bytes), likely blocked by Spotify", len(html))
             return []
 
         track_ids = _extract_track_ids_from_html(html)

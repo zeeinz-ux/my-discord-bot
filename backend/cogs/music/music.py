@@ -579,7 +579,7 @@ class Music(commands.Cog):
                 if original_total_tracks <= 1 and source in ("oembed", "html_scrape", "failed"):
                     rebuilt = []
 
-                    # 1) Coba extract JSON dari halaman Spotify (React state)
+                    # 1) Coba extract JSON dari halaman Spotify (React state) via MULTIPLE URL formats
                     logger.info(f"[SPOTIFY FALLBACK] Semua primary source gagal (source={source}), coba extract JSON dari page...")
                     await loading_msg.edit(content="⏳ Membaca playlist Spotify...")
                     try:
@@ -588,41 +588,58 @@ class Music(commands.Cog):
                             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                             "Accept-Language": "en-US,en;q=0.5",
                         }
-                        async with session.get(search_query, headers=html_headers, timeout=aiohttp.ClientTimeout(total=12)) as resp:
-                            if resp.status == 200:
-                                html = await resp.text()
-                                logger.info(f"[SPOTIFY FALLBACK] Page fetched OK ({len(html)} bytes)")
 
-                                # Extract all script content and try to parse Spotify React state JSON
-                                script_contents = re.findall(
-                                    r'<script[^>]*>(.*?)</script>',
-                                    html,
-                                    re.DOTALL | re.IGNORECASE,
-                                )
+                        # Coba beberapa format URL Spotify (original, embed, locale)
+                        spotify_urls = [search_query]
+                        if spotify_type and spotify_id:
+                            spotify_urls.append(f"https://open.spotify.com/embed/{spotify_type}/{spotify_id}")
+                            spotify_urls.append(f"https://open.spotify.com/intl/en/{spotify_type}/{spotify_id}")
 
-                                found_tracks = _extract_tracks_from_scripts(script_contents)
+                        found_tracks = []
+                        for attempt_url in spotify_urls:
+                            logger.info(f"[SPOTIFY FALLBACK] Fetching: {attempt_url}")
+                            try:
+                                async with session.get(attempt_url, headers=html_headers, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+                                    if resp.status == 200:
+                                        html = await resp.text()
+                                        logger.info(f"[SPOTIFY FALLBACK] Page fetched OK ({len(html)} bytes)")
 
-                                if found_tracks:
-                                    logger.info(f"[SPOTIFY FALLBACK] Found {len(found_tracks)} tracks via JSON parsing")
-                                    seen_ids = set()
-                                    for tid, title, artist, cover, duration_ms in found_tracks:
-                                        if not title:
+                                        if len(html) < 2000:
+                                            logger.info(f"[SPOTIFY FALLBACK] Page too small ({len(html)} bytes), mungkin di-block. Coba URL lain...")
                                             continue
-                                        if tid and tid in seen_ids:
-                                            continue
-                                        seen_ids.add(tid)
-                                        q = f"ytmsearch:{artist} - {title}" if artist and artist not in ("Unknown", "Spotify") else f"ytmsearch:{title}"
-                                        rebuilt.append(ResolvedTrack(
-                                            name=title,
-                                            artists=artist or "Unknown",
-                                            album=None,
-                                            duration_ms=duration_ms,
-                                            artwork=cover,
-                                            spotify_id=tid,
-                                            youtube_id=None,
-                                            query=q,
-                                            source="json_scrape",
-                                        ))
+
+                                        script_contents = re.findall(
+                                            r'<script[^>]*>(.*?)</script>',
+                                            html,
+                                            re.DOTALL | re.IGNORECASE,
+                                        )
+                                        found_tracks = _extract_tracks_from_scripts(script_contents)
+                                        if found_tracks:
+                                            logger.info(f"[SPOTIFY FALLBACK] Found {len(found_tracks)} tracks via {attempt_url}")
+                                            break
+                            except Exception:
+                                continue
+
+                        if found_tracks:
+                            seen_ids = set()
+                            for tid, title, artist, cover, duration_ms in found_tracks:
+                                if not title:
+                                    continue
+                                if tid and tid in seen_ids:
+                                    continue
+                                seen_ids.add(tid)
+                                q = f"ytmsearch:{artist} - {title}" if artist and artist not in ("Unknown", "Spotify") else f"ytmsearch:{title}"
+                                rebuilt.append(ResolvedTrack(
+                                    name=title,
+                                    artists=artist or "Unknown",
+                                    album=None,
+                                    duration_ms=duration_ms,
+                                    artwork=cover,
+                                    spotify_id=tid,
+                                    youtube_id=None,
+                                    query=q,
+                                    source="json_scrape",
+                                ))
                     except Exception as e:
                         logger.info(f"[SPOTIFY FALLBACK] JSON extract error (non-fatal): {e}")
 
@@ -662,7 +679,10 @@ class Music(commands.Cog):
                         logger.info("[SPOTIFY FALLBACK] Semua scrape gagal, coba yt-dlp (timeout 20s)...")
                         await loading_msg.edit(content="⏳ Mencoba yt-dlp...")
                         try:
-                            yt_playlist = await asyncio.wait_for(YtDlpSearcher.extract_playlist(search_query), timeout=20.0)
+                            from urllib.parse import urlparse, urlunparse
+                            parsed = urlparse(search_query)
+                            clean_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
+                            yt_playlist = await asyncio.wait_for(YtDlpSearcher.extract_playlist(clean_url), timeout=20.0)
                             if yt_playlist and yt_playlist.tracks and len(yt_playlist.tracks) > 1:
                                 rebuilt = []
                                 for t in yt_playlist.tracks:
@@ -679,6 +699,16 @@ class Music(commands.Cog):
                             logger.info("[SPOTIFY FALLBACK] yt-dlp timeout")
                         except Exception as e:
                             logger.info(f"[YTDLP FALLBACK ERROR] {e}")
+                        # 4) Fallback terakhir: query tiap track dari oEmbed playlist metadata
+                        # (only if yt-dlp also failed)
+                        if len(rebuilt) <= 1:
+                            logger.info("[SPOTIFY FALLBACK] Semua gagal — user dikasih opsi YouTube langsung")
+                            await loading_msg.edit(content=(
+                                "❌ Gagal mengambil daftar lagu dari Spotify.\n"
+                                "Spotify memblokir akses dari server dan API masih dalam mode Sandbox.\n"
+                                "Gunakan link YouTube langsung atau coba lagi nanti."
+                            ))
+                            return
 
                     if len(rebuilt) > 1:
                         resolved_tracks = rebuilt
