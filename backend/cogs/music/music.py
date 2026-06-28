@@ -104,42 +104,62 @@ class Music(commands.Cog):
 
             artists = track.artists or ""
             name = track.name or ""
+            keywords = f"{artists} {name}".strip()
             if not query:
-                query = f"{artists} {name}"
+                query = keywords
 
             target_dur = track.duration_ms
+            if not query:
+                print(f"[YOUTUBE SEARCH] Empty query for track {track.spotify_id}")
+                return None
 
-            bad_keywords = ["how to", "tutorial", "review", "guide", "spotify promo", "podcast", "thank you", "listeners", "beginner", "tips", "tricks"]
+            # Coba beberapa variasi search, balikin hasil pertama yg lolos minimal threshold
+            search_variations = []
 
-            # Langsung coba search — hanya 2 query paling optimal
-            sq = f"ytmsearch:{query}" if artists or name else f"ytsearch:{query}"
-            results = await YtDlpSearcher.search(sq)
-            if results:
-                candidates = []
+            # 1. Query original (dengan artist + nama)
+            search_variations.append(f"ytmsearch:{query}")
+
+            # 2. Hanya nama lagu (tanpa artist) — kadang lebih akurat
+            if name and artists and name not in query:
+                search_variations.append(f"ytmsearch:{name}")
+
+            # 3. Official audio / music video
+            if artists:
+                search_variations.append(f"ytmsearch:{artists} - {name} official audio")
+                search_variations.append(f"ytmsearch:{artists} - {name} music video")
+
+            # 4. Artist + name (jika query berbeda)
+            if keywords and keywords != query:
+                search_variations.append(f"ytmsearch:{keywords}")
+
+            attempted = set()
+            for sq in search_variations:
+                if sq in attempted:
+                    continue
+                attempted.add(sq)
+                try:
+                    results = await YtDlpSearcher.search(sq)
+                except Exception:
+                    continue
+                if not results:
+                    continue
+
                 for r in results:
-                    lower_title = (r.title or "").lower()
-                    if any(bk in lower_title for bk in bad_keywords):
-                        continue
                     score = self._title_similarity(f"{artists} {name}", f"{r.author or ''} {r.title or ''}")
                     dur_diff = abs((r.duration or 0) - (target_dur or 0)) if target_dur else 0
-                    candidates.append((r, score, dur_diff))
-
-                if candidates:
-                    candidates.sort(key=lambda x: (-x[1], x[2]))
-                    best, best_score, best_diff = candidates[0]
-                    if best_score > 0.25 or not target_dur or best_diff < 5000:
-                        return best
-
-            # Fallback: coba dengan "official audio"
-            if artists:
-                sq2 = f"ytmsearch:{artists} - {name} official audio"
-                results2 = await YtDlpSearcher.search(sq2)
-                if results2:
-                    r = results2[0]
-                    lower_title = (r.title or "").lower()
-                    if not any(bk in lower_title for bk in bad_keywords):
+                    if score > 0.15 or not target_dur or dur_diff < 10000:
                         return r
 
+            # Fallback terakhir: ytmsearch dengan nama aja, return apapun
+            final_query = name or query
+            try:
+                results = await YtDlpSearcher.search(f"ytmsearch:{final_query}")
+                if results:
+                    return results[0]
+            except Exception:
+                pass
+
+            print(f"[YOUTUBE SEARCH] All variations failed for: {artists} - {name}")
         except Exception as e:
             print(f"[YOUTUBE SEARCH ERROR] {track.name}: {e}")
         return None

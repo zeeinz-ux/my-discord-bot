@@ -79,10 +79,14 @@ class GeneralCog(commands.Cog):
             for cmd in cmds:
                 desc = (cmd.description or cmd.short_doc or "—").split("\n")[0][:60]
                 sign = cmd.signature or ""
-                lines.append(f"`/{cmd.name} {sign}` — {desc}")
+                sign = " ".join(sign.split()[:3])
+                line = f"`/{cmd.name} {sign}` — {desc}"
+                if len(line) > 100:
+                    line = line[:97] + "..."
+                lines.append(line)
             value = "\n".join(lines)
             if len(value) > 1024:
-                value = value[:1010] + "\n…"
+                value = value[:1000] + "\n… *(truncated)*"
             embed.add_field(name=f"{emoji} {cog_name}", value=value, inline=False)
 
         embed.set_footer(text=f"Requested by {ctx.author.name}")
