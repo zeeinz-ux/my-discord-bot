@@ -278,6 +278,11 @@ class NowPlayingView(discord.ui.View):
         if not i.user.voice or i.user.voice.channel.id != self.controller.vc.channel.id:
             await i.response.send_message("Join the bot's voice channel first", ephemeral=True)
             return False
+        if self.controller._owner_id is not None and self.controller._owner_id != i.user.id:
+            owner = i.guild.get_member(self.controller._owner_id)
+            name = owner.display_name if owner else "another user"
+            await i.response.send_message(f"❌ Hanya **{name}** yang bisa mengontrol musik saat ini.", ephemeral=True)
+            return False
         return True
 
     async def _ok(self, i: discord.Interaction, msg: str):
@@ -407,7 +412,7 @@ class MusicController:
         self._start_time = 0.0
         self._paused = False
         self._paused_position = 0.0
-        self._pause_reason: str = "none"  # none, manual, alone, mute
+        self._pause_reason: str = "none"
         self._last_track_id = None
         self._last_embed_time = 0.0
         self._alone_task = None
@@ -425,6 +430,14 @@ class MusicController:
         self._recovery_attempts: int = 0
         self._stopped: bool = False
         self._state_file: str = f"/tmp/discord_player_state.json"
+        self._owner_id: Optional[int] = None
+
+    def set_owner(self, user_id: int):
+        if self._owner_id is None:
+            self._owner_id = user_id
+
+    def is_owner(self, user_id: int) -> bool:
+        return self._owner_id is not None and self._owner_id == user_id
 
     def _cache_path(self, url: str) -> str:
         h = hashlib.md5(url.encode()).hexdigest()

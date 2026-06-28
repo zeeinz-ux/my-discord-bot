@@ -229,6 +229,15 @@ class Music(commands.Cog):
             if controller._pause_reason == "alone":
                 await controller.resume_for("manual")
 
+    def _check_owner(self, ctx: commands.Context) -> bool:
+        controller = self.get_controller(ctx.guild.id)
+        if controller._owner_id is not None and controller._owner_id != ctx.author.id:
+            owner = ctx.guild.get_member(controller._owner_id)
+            name = owner.display_name if owner else "another user"
+            ctx.command_failed = True
+            raise commands.CommandError(f"Hanya **{name}** yang bisa mengontrol musik saat ini.")
+        return True
+
     # ==========================================================
     # COMMANDS
     # ==========================================================
@@ -270,6 +279,16 @@ class Music(commands.Cog):
         controller = self.get_controller(guild_id)
         controller.vc = voice_client
         controller.home = ctx.channel
+
+        # Set owner hanya sekali (saat pertama bot connect)
+        if controller._owner_id is None:
+            controller._owner_id = ctx.author.id
+            print(f"[PLAY CMD] Owner set: {ctx.author} (ID: {ctx.author.id})")
+
+        # Only owner can add tracks or hijack the session
+        if controller.current_track and controller._owner_id != ctx.author.id:
+            await ctx.send(f"❌ Hanya <@{controller._owner_id}> yang bisa menambah lagu saat ini.", ephemeral=True)
+            return
 
         print(f"[PLAY CMD] Player ready. Current: {controller.current_track}")
         search_query = query.strip()
@@ -541,6 +560,8 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name="pause", description="Pause lagu yang sedang diputar")
     async def pause(self, ctx: commands.Context):
+        if not self._check_owner(ctx):
+            return
         voice_client = ctx.guild.voice_client
         if not voice_client or not voice_client.is_playing():
             await ctx.send("❌ Tidak ada lagu yang sedang diputar.", ephemeral=True)
@@ -554,6 +575,8 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name="resume", description="Lanjutkan lagu yang di-pause")
     async def resume(self, ctx: commands.Context):
+        if not self._check_owner(ctx):
+            return
         voice_client = ctx.guild.voice_client
         if not voice_client or not voice_client.is_paused():
             await ctx.send("❌ Tidak ada lagu yang di-pause.", ephemeral=True)
@@ -567,6 +590,8 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name="skip", description="Skip ke lagu berikutnya")
     async def skip(self, ctx: commands.Context):
+        if not self._check_owner(ctx):
+            return
         controller = self.get_controller(ctx.guild.id)
         voice_client = ctx.guild.voice_client
         if not voice_client or not controller.current_track:
@@ -585,6 +610,8 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name="stop", description="Stop lagu, clear queue, keluar voice channel")
     async def stop(self, ctx: commands.Context):
+        if not self._check_owner(ctx):
+            return
         controller = self.get_controller(ctx.guild.id)
         voice_client = ctx.guild.voice_client
         if not voice_client:
@@ -665,6 +692,8 @@ class Music(commands.Cog):
     @commands.hybrid_command(name="volume", description="Atur volume bot (0-1000)")
     @app_commands.describe(level="Volume level 0-1000 (default 100)")
     async def volume(self, ctx: commands.Context, level: int):
+        if not self._check_owner(ctx):
+            return
         if not 0 <= level <= 1000:
             await ctx.send("❌ Volume harus antara 0-1000.", ephemeral=True)
             return
@@ -684,6 +713,8 @@ class Music(commands.Cog):
         app_commands.Choice(name="Queue (Semua Lagu)", value="queue"),
     ])
     async def loop(self, ctx: commands.Context, mode: app_commands.Choice[str]):
+        if not self._check_owner(ctx):
+            return
         controller = self.get_controller(ctx.guild.id)
         controller.loop_mode = mode.value
         if mode.value == "queue":
@@ -694,6 +725,8 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name="shuffle", description="Acak antrian lagu")
     async def shuffle(self, ctx: commands.Context):
+        if not self._check_owner(ctx):
+            return
         controller = self.get_controller(ctx.guild.id)
         if not controller.queue:
             await ctx.send("📭 Queue kosong, tidak ada yang bisa diacak.", ephemeral=True)
@@ -704,6 +737,8 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name="autoplay", description="Toggle autoplay: bot cari lagu serupa ketika queue habis")
     async def autoplay(self, ctx: commands.Context):
+        if not self._check_owner(ctx):
+            return
         controller = self.get_controller(ctx.guild.id)
         controller.autoplay = not controller.autoplay
         status = "ON ✅" if controller.autoplay else "OFF ❌"
@@ -712,6 +747,8 @@ class Music(commands.Cog):
     @commands.hybrid_command(name="seek", description="Skip ke posisi tertentu dalam lagu")
     @app_commands.describe(position="Format: 1:30 atau 90 (detik)")
     async def seek(self, ctx: commands.Context, position: str):
+        if not self._check_owner(ctx):
+            return
         controller = self.get_controller(ctx.guild.id)
         voice_client = ctx.guild.voice_client
         if not voice_client or not controller.current_track:
@@ -741,6 +778,8 @@ class Music(commands.Cog):
     @commands.hybrid_command(name="remove", description="Hapus lagu dari queue berdasarkan nomor")
     @app_commands.describe(index="Nomor lagu di /queue")
     async def remove(self, ctx: commands.Context, index: int):
+        if not self._check_owner(ctx):
+            return
         controller = self.get_controller(ctx.guild.id)
         if not controller.queue:
             await ctx.send("📭 Queue kosong.", ephemeral=True)
@@ -758,6 +797,8 @@ class Music(commands.Cog):
     @commands.hybrid_command(name="move", description="Pindah posisi lagu di queue")
     @app_commands.describe(from_index="Posisi asal", to_index="Posisi tujuan")
     async def move(self, ctx: commands.Context, from_index: int, to_index: int):
+        if not self._check_owner(ctx):
+            return
         controller = self.get_controller(ctx.guild.id)
         if not controller.queue:
             await ctx.send("📭 Queue kosong.", ephemeral=True)
@@ -773,6 +814,8 @@ class Music(commands.Cog):
     @commands.hybrid_command(name="skipto", description="Skip ke lagu nomor tertentu di queue")
     @app_commands.describe(index="Nomor lagu di /queue")
     async def skipto(self, ctx: commands.Context, index: int):
+        if not self._check_owner(ctx):
+            return
         controller = self.get_controller(ctx.guild.id)
         voice_client = ctx.guild.voice_client
         if not voice_client or not controller.queue:
@@ -789,6 +832,8 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name="disconnect", description="Keluar dari voice channel")
     async def disconnect(self, ctx: commands.Context):
+        if not self._check_owner(ctx):
+            return
         controller = self.get_controller(ctx.guild.id)
         voice_client = ctx.guild.voice_client
         if not voice_client:
@@ -799,6 +844,8 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name="clearqueue", description="Kosongkan queue tanpa menghentikan lagu yang sedang diputar")
     async def clearqueue(self, ctx: commands.Context):
+        if not self._check_owner(ctx):
+            return
         controller = self.get_controller(ctx.guild.id)
         if not controller.queue:
             await ctx.send("📭 Queue sudah kosong.", ephemeral=True)
@@ -809,6 +856,8 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name="replay", description="Putar ulang lagu dari awal")
     async def replay(self, ctx: commands.Context):
+        if not self._check_owner(ctx):
+            return
         controller = self.get_controller(ctx.guild.id)
         voice_client = ctx.guild.voice_client
         if not voice_client or not controller.current_track:
