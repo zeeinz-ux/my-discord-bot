@@ -199,6 +199,8 @@ async def update_stats():
                         })
                         queue_total_ms += (t.duration or 0)
 
+                    art = controller.current_track.artwork or ""
+                    print(f"[MUSIC STATUS SEND] guild={guild_id_str} title={controller.current_track.title} thumb={art[:60] if art else 'EMPTY'}")
                     set_music_state(guild_id_str, {
                         "connected": True,
                         "playing": not controller.paused,
@@ -210,7 +212,7 @@ async def update_stats():
                             "title": controller.current_track.title,
                             "artist": controller.current_track.author or "Unknown",
                             "duration": (controller.current_track.duration or 0) // 1000,
-                            "thumbnail": controller.current_track.artwork or "",
+                            "thumbnail": art,
                             "uri": controller.current_track.uri or ""
                         },
                         "queue": queue_list,
