@@ -114,6 +114,18 @@ def _find_tracks_in_json(data: Any, depth: int = 0) -> List[Tuple[str, str, str,
                     cover = cover[0].get("url", "") if cover else ""
                 duration = t.get("duration_ms") or t.get("duration")
                 if tid or title:
+                    if not artist and isinstance(t, dict):
+                        logger.info(
+                            "[SPOTIFY PARSE] Track keys: %s | artist=%s artists=%s author=%s name=%s id=%s track=%s album=%s",
+                            list(t.keys())[:15],
+                            t.get("artist", "MISSING"),
+                            t.get("artists", "MISSING"),
+                            t.get("author", "MISSING"),
+                            t.get("name", "MISSING"),
+                            t.get("id", "MISSING"),
+                            "TRACK_KEY" if "track" in t else "NO_TRACK_KEY",
+                            "ALBUM_KEY" if "album" in t else "NO_ALBUM_KEY",
+                        )
                     results.append((tid, title, artist, cover, duration))
 
         # Spotify items (Official API format page: {items: [{track: {...}}]})
