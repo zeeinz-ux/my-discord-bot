@@ -29,12 +29,18 @@ class Music(commands.Cog):
         self.bot = bot
         self.controllers = {}
         self._spotify_enabled = True
+        self._session: Optional[aiohttp.ClientSession] = None
         self.spotify = SpotifyResolver(
             fallback_client_id=os.getenv("SPOTIFY_CLIENT_ID"),
             fallback_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET"),
         )
         print("[SPOTIFY] SpotifyDown API resolver aktif (fallback: Official API)")
         print(f"[DEBUG SPOTIFY] Client ID Terdeteksi: {os.getenv('SPOTIFY_CLIENT_ID')[:5]}***" if os.getenv('SPOTIFY_CLIENT_ID') else "[DEBUG SPOTIFY] Client ID TIDAK DITEMUKAN!")
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
 
     def get_controller(self, guild_id: int) -> MusicController:
         if guild_id not in self.controllers:
@@ -103,25 +109,12 @@ class Music(commands.Cog):
 
             target_dur = track.duration_ms
 
-            bad_keywords = ["how to", "tutorial", "review", "guide", "spotify promo", "podcast", "thank you", "listeners"]
+            bad_keywords = ["how to", "tutorial", "review", "guide", "spotify promo", "podcast", "thank you", "listeners", "beginner", "tips", "tricks"]
 
-            search_queries = []
-            if artists:
-                search_queries = [
-                    f"ytmsearch:{artists} - {name} official audio",
-                    f"ytmsearch:{artists} - {name}",
-                    f"ytmsearch:{artists} {name} audio",
-                    f"ytsearch:{artists} - {name} official audio",
-                    f"ytsearch:{artists} {name} lyrics",
-                ]
-            else:
-                search_queries = [f"ytmsearch:{name} audio", f"ytsearch:{name}"]
-
-            for sq in search_queries:
-                results = await YtDlpSearcher.search(sq)
-                if not results:
-                    continue
-
+            # Langsung coba search — hanya 2 query paling optimal
+            sq = f"ytmsearch:{query}" if artists or name else f"ytsearch:{query}"
+            results = await YtDlpSearcher.search(sq)
+            if results:
                 candidates = []
                 for r in results:
                     lower_title = (r.title or "").lower()
@@ -131,18 +124,21 @@ class Music(commands.Cog):
                     dur_diff = abs((r.duration or 0) - (target_dur or 0)) if target_dur else 0
                     candidates.append((r, score, dur_diff))
 
-                if not candidates:
-                    continue
+                if candidates:
+                    candidates.sort(key=lambda x: (-x[1], x[2]))
+                    best, best_score, best_diff = candidates[0]
+                    if best_score > 0.25 or not target_dur or best_diff < 5000:
+                        return best
 
-                candidates.sort(key=lambda x: (-x[1], x[2]))
-                best, best_score, best_diff = candidates[0]
-
-                if target_dur and best_diff < 3000:
-                    return best
-                if best_score > 0.35:
-                    return best
-                if sq == search_queries[-1]:
-                    return best
+            # Fallback: coba dengan "official audio"
+            if artists:
+                sq2 = f"ytmsearch:{artists} - {name} official audio"
+                results2 = await YtDlpSearcher.search(sq2)
+                if results2:
+                    r = results2[0]
+                    lower_title = (r.title or "").lower()
+                    if not any(bk in lower_title for bk in bad_keywords):
+                        return r
 
         except Exception as e:
             print(f"[YOUTUBE SEARCH ERROR] {track.name}: {e}")
@@ -317,8 +313,8 @@ class Music(commands.Cog):
                 f"🎵 Mengambil metadata Spotify ({spotify_type}) via SpotifyDown API..."
             )
 
-            async with aiohttp.ClientSession() as session:
-                resolved_tracks, source = await self.spotify.resolve(search_query, session)
+            session = await self._get_session()
+            resolved_tracks, source = await self.spotify.resolve(search_query, session)
 
             if not resolved_tracks:
                 await loading_msg.edit(
@@ -385,6 +381,7 @@ class Music(commands.Cog):
                 total_tracks = len(resolved_tracks)
                 print(f"[SPOTIFY {spotify_type.upper()}] {original_total_tracks} total, limited to {total_tracks} resolved via {source}")
 
+                # spotify_down → YouTube search concurrent (15 paralel)
                 total_ms = sum(t.duration_ms or 0 for t in resolved_tracks)
                 total_duration = format_duration(total_ms) if total_ms > 0 else "Unknown"
 
@@ -397,7 +394,7 @@ class Music(commands.Cog):
                 await loading_msg.edit(content=f"⏳ Mencari {total_tracks} lagu di YouTube... (0/{total_tracks})")
 
                 playables: list[Optional[YtDlpTrack]] = [None] * total_tracks
-                sem = asyncio.Semaphore(5)
+                sem = asyncio.Semaphore(15)
 
                 async def load_one(index: int, rt: ResolvedTrack):
                     async with sem:
@@ -1069,6 +1066,10 @@ class Music(commands.Cog):
         doc_ref.delete()
         await ctx.send(f"🗑️ Playlist **{name}** dihapus.")
 
+
+    async def cog_unload(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Music(bot))
