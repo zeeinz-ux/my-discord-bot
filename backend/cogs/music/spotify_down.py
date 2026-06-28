@@ -444,12 +444,15 @@ class SpotifyResolver:
         if self.official:
             raw = await self.official.get_artist_top_tracks(session, artist_id)
             if raw:
+                logger.info("[SPOTIFY RESOLVE] Artist Official API: %d tracks", len(raw))
                 return [self._track_to_resolved(t, t.get("id", ""), "spotify_official") for t in raw], "spotify_official"
+            logger.warning("[SPOTIFY RESOLVE] Artist Official API returned empty")
 
         # 2) Try oEmbed for artist name, then resolve top tracks via public page
         meta = await _get_spotify_metadata_oembed(session, original_url)
         if meta and meta.get("name"):
             artist_name = meta.get("name", "")
+            logger.info("[SPOTIFY RESOLVE] Artist oEmbed fallback: %s", artist_name)
             query = f"ytmsearch:{artist_name} top tracks"
             return [
                 ResolvedTrack(
@@ -465,6 +468,7 @@ class SpotifyResolver:
                 )
             ], "ytsearch"
 
+        logger.error("[SPOTIFY RESOLVE] ALL sources failed for artist %s", artist_id)
         return [], "failed"
 
     async def _resolve_playlist(
@@ -478,12 +482,16 @@ class SpotifyResolver:
         if self.official:
             raw = await self.official.get_playlist_tracks(session, playlist_id)
             if raw:
+                logger.info("[SPOTIFY RESOLVE] Official API: %d tracks", len(raw))
                 return [self._track_to_resolved(t, t.get("id", ""), "spotify_official") for t in raw], "spotify_official"
+            logger.warning("[SPOTIFY RESOLVE] Official API returned empty — fallthrough")
 
         # 2) SpotifyDown API
         raw = await sd.get_playlist_tracks(playlist_id)
         if raw:
+            logger.info("[SPOTIFY RESOLVE] SpotifyDown: %d tracks", len(raw))
             return self._convert_sd_tracks(raw), "spotifydown"
+        logger.warning("[SPOTIFY RESOLVE] SpotifyDown returned empty — fallthrough")
 
         # 3) Best-effort scrape of public playlist page -> track IDs -> track oEmbed
         scraped_tracks = await self._resolve_public_page_track_ids(
@@ -493,11 +501,14 @@ class SpotifyResolver:
             container_id=playlist_id,
         )
         if scraped_tracks:
+            logger.info("[SPOTIFY RESOLVE] Page scrape: %d tracks", len(scraped_tracks))
             return scraped_tracks, "scrape_oembed"
+        logger.warning("[SPOTIFY RESOLVE] Page scrape returned empty — fallthrough")
 
         # 4) Playlist metadata only
         meta = await _get_spotify_metadata_oembed(session, original_url)
         if meta and meta.get("name"):
+            logger.warning("[SPOTIFY RESOLVE] Final fallback oEmbed — hanya metadata, tanpa track individual")
             return [
                 ResolvedTrack(
                     name=meta["name"],
@@ -514,6 +525,7 @@ class SpotifyResolver:
 
         meta = await _get_spotify_metadata_html(session, original_url)
         if meta and meta.get("name"):
+            logger.warning("[SPOTIFY RESOLVE] Final fallback HTML — hanya metadata, tanpa track individual")
             return [
                 ResolvedTrack(
                     name=meta["name"],
@@ -528,6 +540,7 @@ class SpotifyResolver:
                 )
             ], "html_scrape"
 
+        logger.error("[SPOTIFY RESOLVE] ALL sources failed for playlist %s", playlist_id)
         return [], "failed"
 
     async def _resolve_album(
@@ -541,12 +554,16 @@ class SpotifyResolver:
         if self.official:
             raw = await self.official.get_album_tracks(session, album_id)
             if raw:
+                logger.info("[SPOTIFY RESOLVE] Album Official API: %d tracks", len(raw))
                 return [self._track_to_resolved(t, t.get("id", ""), "spotify_official") for t in raw], "spotify_official"
+            logger.warning("[SPOTIFY RESOLVE] Album Official API returned empty")
 
         # 2) SpotifyDown API
         raw = await sd.get_album_tracks(album_id)
         if raw:
+            logger.info("[SPOTIFY RESOLVE] Album SpotifyDown: %d tracks", len(raw))
             return self._convert_sd_tracks(raw), "spotifydown"
+        logger.warning("[SPOTIFY RESOLVE] Album SpotifyDown returned empty")
 
         # 3) Public page scrape
         scraped_tracks = await self._resolve_public_page_track_ids(
@@ -556,11 +573,14 @@ class SpotifyResolver:
             container_id=album_id,
         )
         if scraped_tracks:
+            logger.info("[SPOTIFY RESOLVE] Album scrape: %d tracks", len(scraped_tracks))
             return scraped_tracks, "scrape_oembed"
+        logger.warning("[SPOTIFY RESOLVE] Album scrape returned empty")
 
         # 4) Album metadata only
         meta = await _get_spotify_metadata_oembed(session, original_url)
         if meta and meta.get("name"):
+            logger.warning("[SPOTIFY RESOLVE] Album final fallback oEmbed — hanya metadata")
             return [
                 ResolvedTrack(
                     name=meta["name"],
@@ -575,6 +595,7 @@ class SpotifyResolver:
                 )
             ], "oembed"
 
+        logger.error("[SPOTIFY RESOLVE] ALL sources failed for album %s", album_id)
         return [], "failed"
 
     async def _resolve_track(
@@ -589,12 +610,14 @@ class SpotifyResolver:
                 return None
             data = await self.official.get_track(session, track_id)
             if data:
+                logger.info("[SPOTIFY RESOLVE] Track Official API success: %s", data.get("name", track_id))
                 return self._track_to_resolved(data, track_id, "official_api")
             return None
 
         async def try_spotifydown():
             yt_id = await sd.get_youtube_id(track_id)
             if yt_id:
+                logger.info("[SPOTIFY RESOLVE] Track SpotifyDown success: yt_id=%s", yt_id)
                 return ResolvedTrack(
                     name=track_id,
                     artists="",
@@ -626,9 +649,11 @@ class SpotifyResolver:
 
         for p in pending:
             p.cancel()
+        logger.warning("[SPOTIFY RESOLVE] Track Official+SpotifyDown both failed for %s — oEmbed fallback", track_id)
 
         meta = await _get_spotify_track_oembed(session, track_id)
         if meta and meta.get("title"):
+            logger.info("[SPOTIFY RESOLVE] Track oEmbed success: %s - %s", meta.get("artist"), meta.get("title"))
             return [
                 ResolvedTrack(
                     name=meta["title"],
@@ -649,6 +674,7 @@ class SpotifyResolver:
 
         meta = await _get_spotify_metadata_oembed(session, original_url)
         if meta and meta.get("name"):
+            logger.warning("[SPOTIFY RESOLVE] Track final fallback oEmbed — hanya metadata")
             return [
                 ResolvedTrack(
                     name=meta["name"],
@@ -663,6 +689,7 @@ class SpotifyResolver:
                 )
             ], "oembed"
 
+        logger.error("[SPOTIFY RESOLVE] ALL sources failed for track %s", track_id)
         return [], "failed"
 
     async def _resolve_public_page_track_ids(
@@ -678,23 +705,36 @@ class SpotifyResolver:
         - collect track IDs
         - resolve each track via track oEmbed
         """
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
         try:
             async with session.get(
                 page_url,
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=aiohttp.ClientTimeout(total=12),
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=15),
+                allow_redirects=True,
             ) as resp:
                 if resp.status != 200:
+                    logger.warning("[SPOTIFY SCRAPE] %s page returned HTTP %s", container_name, resp.status)
                     return []
 
                 html = await resp.text()
+                logger.info("[SPOTIFY SCRAPE] %s page fetched OK (%d bytes)", container_name, len(html))
+        except asyncio.TimeoutError:
+            logger.error("[SPOTIFY SCRAPE] Timeout fetching %s page", container_name)
+            return []
         except Exception as e:
             logger.error("[SPOTIFY SCRAPE] Failed to fetch %s page: %s", container_name, e)
             return []
 
         track_ids = _extract_track_ids_from_html(html)
         if not track_ids:
+            logger.warning("[SPOTIFY SCRAPE] No track IDs found in %s page HTML", container_name)
             return []
+        logger.info("[SPOTIFY SCRAPE] Found %d track IDs in %s page", len(track_ids), container_name)
 
         semaphore = asyncio.Semaphore(CONCURRENT_FETCH_LIMIT)
         resolved: List[Optional[ResolvedTrack]] = [None] * len(track_ids)

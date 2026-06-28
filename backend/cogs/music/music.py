@@ -398,15 +398,47 @@ class Music(commands.Cog):
             else:
                 original_total_tracks = len(resolved_tracks)
 
-                if original_total_tracks <= 1 and source in ("oembed", "html_scrape"):
-                    await loading_msg.edit(
-                        content=(
-                            "❌ Gagal mengambil daftar lagu dari Spotify.\n"
-                            "SpotifyDown API sedang down dan Official API juga gagal.\n"
-                            "Coba link langsung YouTube atau coba lagi nanti."
-                        )
-                    )
-                    return
+                if original_total_tracks <= 1 and source in ("oembed", "html_scrape", "failed"):
+                    print(f"[SPOTIFY FALLBACK] Semua primary source gagal (source={source}), coba yt-dlp Spotify extractor...")
+                    await loading_msg.edit(content="⏳ Mencoba yt-dlp Spotify extractor...")
+                    try:
+                        yt_playlist = await YtDlpSearcher.extract_playlist(search_query)
+                        if yt_playlist and yt_playlist.tracks and len(yt_playlist.tracks) > 1:
+                            rebuilt = []
+                            for t in yt_playlist.tracks:
+                                raw = getattr(t, '_ydl_info', {}) or {}
+                                artists = raw.get('artist') or raw.get('creators') or raw.get('uploader') or ''
+                                if isinstance(artists, list):
+                                    artists = ', '.join(filter(None, artists))
+                                name = raw.get('title') or t.title or 'Unknown'
+                                tid = raw.get('id') or t.uri or ''
+                                rt_q = f"ytmsearch:{artists} - {name}" if artists else f"ytmsearch:{name}"
+                                rebuilt.append(ResolvedTrack(
+                                    name=name,
+                                    artists=artists or 'Unknown',
+                                    album=yt_playlist.name,
+                                    duration_ms=None,
+                                    artwork=t.artwork or '',
+                                    spotify_id=tid,
+                                    youtube_id=None,
+                                    query=rt_q,
+                                    source="ytdlp_extractor",
+                                ))
+                            if len(rebuilt) > 1:
+                                resolved_tracks = rebuilt
+                                source = "ytdlp_extractor"
+                                original_total_tracks = len(resolved_tracks)
+                                print(f"[SPOTIFY FALLBACK] yt-dlp berhasil: {original_total_tracks} tracks")
+                            else:
+                                await loading_msg.edit(content="❌ Gagal mengambil daftar lagu dari Spotify. Coba link YouTube langsung.")
+                                return
+                        else:
+                            await loading_msg.edit(content="❌ Gagal mengambil daftar lagu dari Spotify. Coba link YouTube langsung.")
+                            return
+                    except Exception as e:
+                        print(f"[YTDLP SPOTIFY FALLBACK ERROR] {e}")
+                        await loading_msg.edit(content="❌ Gagal mengambil daftar lagu dari Spotify. Coba link YouTube langsung.")
+                        return
 
                 # Simpen semua resolved tracks buat auto-load nanti
                 controller._playlist_url = search_query
