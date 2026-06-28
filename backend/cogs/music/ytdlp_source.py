@@ -209,6 +209,55 @@ class YtDlpSearcher:
     _CACHE_TTL = 300
 
     @staticmethod
+    @staticmethod
+    async def _youtube_api_search(raw_query: str) -> list:
+        api_key = os.getenv("YOUTUBE_API_KEY", "")
+        if not api_key:
+            return []
+        try:
+            session = aiohttp.ClientSession()
+            try:
+                params = {
+                    "part": "snippet",
+                    "q": raw_query,
+                    "type": "video",
+                    "maxResults": 5,
+                    "videoCategoryId": "10",
+                    "key": api_key,
+                }
+                async with session.get(
+                    "https://www.googleapis.com/youtube/v3/search",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=8),
+                ) as resp:
+                    if resp.status != 200:
+                        return []
+                    data = await resp.json()
+            finally:
+                await session.close()
+
+            tracks = []
+            for item in data.get("items", []):
+                vid = item.get("id", {}).get("videoId", "")
+                snippet = item.get("snippet", {})
+                if not vid:
+                    continue
+                title = snippet.get("title", "Unknown")
+                author = snippet.get("channelTitle", "Unknown")
+                duration = snippet.get("duration", 0)
+                track = YtDlpTrack(
+                    uri=f"https://www.youtube.com/watch?v={vid}",
+                    title=title,
+                    author=author,
+                    duration=duration,
+                    artwork=snippet.get("thumbnails", {}).get("high", {}).get("url", ""),
+                )
+                tracks.append(track)
+            return tracks
+        except Exception:
+            return []
+
+    @staticmethod
     async def search(query: str) -> list:
         cache_key = f"search:{query}"
         cached = YtDlpSearcher._cache.get(cache_key)
@@ -222,6 +271,7 @@ class YtDlpSearcher:
             raw_query = query[len("ytsearch:"):].strip()
             actual_query = f"ytsearch5:{raw_query}"
         else:
+            raw_query = query
             actual_query = query
 
         loop = asyncio.get_event_loop()
@@ -231,20 +281,25 @@ class YtDlpSearcher:
                 lambda: yt_dlp.YoutubeDL(YTDL_SEARCH_OPTS).extract_info(actual_query, download=False)
             )
         except Exception:
-            return []
+            info = None
 
-        if not info:
-            return []
+        if info:
+            entries = info.get("entries", [])
+            if entries:
+                tracks = []
+                for entry in entries:
+                    if not entry:
+                        continue
+                    track = YtDlpTrack.from_info(entry)
+                    tracks.append(track)
+                if tracks:
+                    YtDlpSearcher._cache[cache_key] = {"ts": time.time(), "tracks": tracks}
+                    return tracks
 
-        entries = info.get("entries", [])
-        tracks = []
-        for entry in entries:
-            if not entry:
-                continue
-            track = YtDlpTrack.from_info(entry)
-            tracks.append(track)
-
-        YtDlpSearcher._cache[cache_key] = {"ts": time.time(), "tracks": tracks}
+        # Fallback: YouTube Data API v3 (ringan, tanpa Deno)
+        tracks = await YtDlpSearcher._youtube_api_search(raw_query)
+        if tracks:
+            YtDlpSearcher._cache[cache_key] = {"ts": time.time(), "tracks": tracks}
         return tracks
 
     @staticmethod
