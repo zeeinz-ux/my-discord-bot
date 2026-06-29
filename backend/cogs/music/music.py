@@ -702,6 +702,44 @@ class Music(commands.Cog):
             )
 
             if is_playlist_url:
+                # Coba ambil video ID dari URL (v=...)
+                import urllib.parse
+                _parsed = urllib.parse.urlparse(search_query)
+                _qs = urllib.parse.parse_qs(_parsed.query)
+                _first_video_id = _qs.get('v', [None])[0]
+
+                if _first_video_id:
+                    # Mainkan video pertama langsung tanpa nunggu playlist selesai
+                    _first_url = f"https://www.youtube.com/watch?v={_first_video_id}"
+                    first_track = await asyncio.wait_for(
+                        YtDlpSearcher.extract_info(_first_url), timeout=30.0
+                    )
+                    if first_track:
+                        controller.queue.append(first_track)
+                        await controller.set_volume(100)
+                        await asyncio.sleep(0.3)
+                        next_track = controller.queue.pop(0)
+                        await controller.play(next_track)
+                        logger.info(f"[PLAY CMD] Playing first track immediately: {first_track.title}")
+
+                        async def _resolve_remaining_yt():
+                            _playlist = await YtDlpSearcher.extract_playlist(search_query)
+                            if _playlist and _playlist.tracks:
+                                _count = 0
+                                for _t in _playlist.tracks[:MAX_BATCH]:
+                                    if _t.uri == _first_url or _t.webpage_url == first_track.webpage_url:
+                                        continue
+                                    controller.queue.append(_t)
+                                    _count += 1
+                                logger.info(f"[PLAY CMD] Background: added {_count} more tracks from {_playlist.name}")
+
+                        asyncio.create_task(_resolve_remaining_yt())
+
+                        msg = f"✅ **Memutar:** {first_track.title}\n📁 Sisa playlist sedang dimuat di latar belakang..."
+                        await ctx.send(msg)
+                        return
+                    # fallthrough: fallback ke extract playlist biasa
+                
                 playlist = await asyncio.wait_for(
                     YtDlpSearcher.extract_playlist(search_query),
                     timeout=30.0,
