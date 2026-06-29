@@ -71,7 +71,8 @@ elif os.path.isfile(COOKIES_FILE):
 else:
     _YTDLP_AUTH = ["--extractor-args", "youtube:player_client=mweb,web", "--throttled-rate", "100"]
 
-YTDLP_AUTH_ARGS = _YTDLP_BASE + _YTDLP_AUTH
+_YTDLP_PROXY_FLAG = [] if os.getenv("YTDLP_PROXY") else ["--proxy", ""]
+YTDLP_AUTH_ARGS = _YTDLP_BASE + _YTDLP_AUTH + _YTDLP_PROXY_FLAG
 
 def _get_ytdlp_auth_opts() -> dict:
     # [AUDIT FIX 4] Memaksa koneksi IPv4 (0.0.0.0) agar tidak diblokir Datacenter Ban IPv6
@@ -128,7 +129,7 @@ YTDL_OPTS = {
     "noplaylist": True, 
     "socket_timeout": 10,
     "retries": 1, 
-    "proxy": os.getenv("YTDLP_PROXY"),
+    "proxy": os.getenv("YTDLP_PROXY") or "",
     **_AUTH_OPTS,
 }
 
@@ -141,7 +142,7 @@ YTDL_SEARCH_OPTS = {
     "noplaylist": False, 
     "socket_timeout": 10, 
     "retries": 1, 
-    "proxy": os.getenv("YTDLP_PROXY"),
+    "proxy": os.getenv("YTDLP_PROXY") or "",
     **_AUTH_OPTS,
 }
 
