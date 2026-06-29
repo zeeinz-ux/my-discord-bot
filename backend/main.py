@@ -43,6 +43,9 @@ if _cookies_raw:
 # ===================================================
 
 # ===== RUST POT PROVIDER — bypass YouTube bot detection =====
+import urllib.request
+import urllib.error
+
 _pot_server_proc: subprocess.Popen | None = None
 
 def _start_pot_server():
@@ -57,7 +60,16 @@ def _start_pot_server():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        print(f"[POT] ✅ Server started (PID {_pot_server_proc.pid}) — PO tokens active")
+        # Tunggu sampai server siap (max 10 detik)
+        import time
+        for _ in range(50):
+            try:
+                urllib.request.urlopen("http://127.0.0.1:4416/ping", timeout=1)
+                print(f"[POT] ✅ Server started (PID {_pot_server_proc.pid}) — YouTube PO tokens active")
+                return
+            except urllib.error.URLError:
+                time.sleep(0.2)
+        print(f"[POT] ⚠️ Server started (PID {_pot_server_proc.pid}) but ping timeout — continuing anyway")
     except Exception as e:
         print(f"[POT] ❌ Failed to start: {e}")
 
