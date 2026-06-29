@@ -781,7 +781,14 @@ class MusicController:
                     "Range": "bytes=0-",
                 }
                 async with aiohttp.ClientSession(headers=headers) as session:
-                    async with session.get(direct_url, timeout=aiohttp.ClientTimeout(total=120)) as sr:
+                    # [PHASE 5] Raise aiohttp download timeout 120s -> 300s.
+                    # 120s is too tight for long tracks on slow Railway ->
+                    # Google edge network. A 19-minute track is ~20MB; at
+                    # 1.5MB/s that's already 13s, and with reconnection overhead
+                    # 120s gets eaten before half the file lands. 300s gives
+                    # enough headroom without keeping a stuck download alive
+                    # forever (5 min is still better than OOM-stuck forever).
+                    async with session.get(direct_url, timeout=aiohttp.ClientTimeout(total=300)) as sr:
                         if sr.status not in (200, 206):
                             logger.error(f"[DOWNLOAD] HTTP {sr.status} dari stream URL")
                             return None
@@ -1426,7 +1433,8 @@ class MusicController:
                     return
 
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(direct_url, timeout=aiohttp.ClientTimeout(total=120)) as sr:
+                    # [PHASE 5] Same timeout bump as _download_track: 120s -> 300s.
+                    async with session.get(direct_url, timeout=aiohttp.ClientTimeout(total=300)) as sr:
                         if sr.status != 200:
                             return
                         # [PHASE 3b] Track server-advertised size for truncation check.
