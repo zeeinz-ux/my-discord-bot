@@ -659,6 +659,72 @@ class MusicController:
         h = hashlib.md5(url.encode()).hexdigest()
         return os.path.join(CACHE_DIR, f"{h}.opus")
 
+    # [PHASE 7] Maximum total cache size in bytes. Oldest files are evicted
+    # first when this is exceeded. Sized for Railway free tier 512MB:
+    # leaves 462MB for Discord.py + Firebase + Spotify + queue + ffmpeg.
+    # 50MB ~= 10-15 average-length tracks cached at once.
+    _MAX_CACHE_BYTES = 50 * 1024 * 1024
+
+    def _enforce_cache_size_limit(self) -> None:
+        """[PHASE 7] Evict oldest .opus files from /tmp until total <= cap.
+
+        Called before writing a new download so we never exceed the cap.
+        Sorts by mtime ascending (oldest first), deletes until under limit.
+        Logs each eviction so we can see cache pressure in production.
+        """
+        try:
+            if not os.path.isdir(CACHE_DIR):
+                return
+            files: list[tuple[float, int, str]] = []
+            total = 0
+            for fname in os.listdir(CACHE_DIR):
+                fpath = os.path.join(CACHE_DIR, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                if not fname.endswith(".opus"):
+                    continue
+                try:
+                    sz = os.path.getsize(fpath)
+                    mt = os.path.getmtime(fpath)
+                    files.append((mt, sz, fpath))
+                    total += sz
+                except OSError:
+                    continue
+            if total <= self._MAX_CACHE_BYTES:
+                return
+            # Oldest first
+            files.sort()
+            evicted = 0
+            for mt, sz, fpath in files:
+                if total <= self._MAX_CACHE_BYTES:
+                    break
+                try:
+                    os.remove(fpath)
+                    total -= sz
+                    evicted += 1
+                except OSError as e:
+                    logger.warning(f"[CACHE] Gagal hapus {os.path.basename(fpath)}: {e}")
+            if evicted:
+                logger.info(
+                    f"[CACHE] Evicted {evicted} file(s), "
+                    f"{total // 1024 // 1024}MB/{self._MAX_CACHE_BYTES // 1024 // 1024}MB used"
+                )
+        except Exception as e:
+            logger.warning(f"[CACHE] Size limit check error: {e}")
+
+    def _evict_cached_file(self, url: str) -> None:
+        """[PHASE 7] Delete the cached .opus for a URL, if present.
+        Called after playback ends so each track only persists on disk
+        while it's actively being played or queued behind it.
+        """
+        try:
+            cache = self._cache_path(url)
+            if os.path.isfile(cache):
+                os.remove(cache)
+                logger.debug(f"[CACHE] Evicted post-play: {os.path.basename(cache)}")
+        except OSError as e:
+            logger.warning(f"[CACHE] Gagal hapus post-play: {e}")
+
     # [PHASE 3b] Minimum sane size for a downloaded opus track. Anything
     # smaller is treated as a corrupt/partial file and re-downloaded.
     # 64KB ~= ~3 seconds of 128kbps opus. Most legitimate tracks are >500KB.
@@ -741,6 +807,12 @@ class MusicController:
             return None
 
         dest = self._cache_path(url)
+
+        # [PHASE 7] Enforce cache size limit BEFORE writing. Evicts oldest
+        # .opus files so /tmp/discord_audio_cache/ never grows past 50MB.
+        # This keeps free-tier disk usage bounded and reduces RAM pressure
+        # from filesystem page cache holding deleted-but-not-yet-flushed files.
+        self._enforce_cache_size_limit()
 
         # [PHASE 3b] Before trusting a cached file, validate it. A partial or
         # corrupt file from a previous failed download would otherwise be
@@ -1268,6 +1340,12 @@ class MusicController:
             await self._play_next()
             return
 
+        # [PHASE 7] Clean up the previous track's file BEFORE assigning the
+        # new one to self._current_file. Otherwise the old file becomes
+        # orphaned on disk (referenced only by the soon-to-be-overwritten
+        # _current_file slot) until the next _cleanup_current_file() call,
+        # which then deletes the new file by mistake.
+        await self._cleanup_current_file()
         self._current_file = file_path
         logger.info(f"[DEBUG PLAY] Menyiapkan audio stream: {file_path}")
 
@@ -1412,6 +1490,9 @@ class MusicController:
         if not url or not re.match(r'^https?://[^\s]+$', url):
             return
         dest = self._cache_path(url)
+        # [PHASE 7] Same eviction as _download_track — preload can also push
+        # the cache over the cap.
+        self._enforce_cache_size_limit()
         # [PHASE 3b] Validate cached file before trusting it. _validate_cached_file
         # deletes the file and returns False if it's corrupt/truncated.
         if os.path.isfile(dest) and self._validate_cached_file(dest):
