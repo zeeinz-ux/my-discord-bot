@@ -314,7 +314,15 @@ def api_boost_history(guild_id: str):
     if db is None:
         return jsonify({"success": False, "boosts": [], "message": "Firebase unavailable"}), 200
     try:
-        docs = db.collection("boosts").where("guild_id", "==", str(guild_id)).stream()
+        all_docs = list(db.collection("boosts").limit(20).stream())
+        all_guilds = set()
+        for d in all_docs:
+            g = d.to_dict().get("guild_id", "")
+            if g: all_guilds.add(g)
+        print(f"[BOOST API] 📊 Total boost di DB: {len(all_docs)}, guild_ids: {all_guilds}")
+        print(f"[BOOST API] 📊 Dicari guild_id={guild_id}, cocok? {guild_id in all_guilds}")
+
+        docs = [d for d in all_docs if d.to_dict().get("guild_id") == str(guild_id)]
         boosts = []
         for doc in docs:
             d = doc.to_dict()
@@ -332,6 +340,7 @@ def api_boost_history(guild_id: str):
         boosts.sort(key=lambda b: b["boosted_at"], reverse=True)
         return jsonify({"success": True, "boosts": boosts, "count": len(boosts)}), 200
     except Exception as e:
+        traceback.print_exc()
         print(f"[BOOST API] ❌ history error: {e}")
         return jsonify({"success": False, "boosts": [], "message": str(e)}), 500
 
