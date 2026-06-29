@@ -745,6 +745,25 @@ class Music(commands.Cog):
                         except Exception:
                             pass
 
+                    # [PHASE 11] Race-condition fix: if the controller went
+                    # idle while we were resolving (e.g. first track finished
+                    # before our search_youtube_for_tracks completed), kick
+                    # off the next track so the playlist doesn't stall.
+                    try:
+                        await asyncio.sleep(0.5)
+                        if (
+                            controller.current_track is None
+                            and controller.queue
+                            and controller.vc
+                            and controller.vc.is_connected()
+                            and not getattr(controller, "_stopped", True)
+                        ):
+                            _next = controller.queue.pop(0)
+                            logger.info(f"[PLAYLIST BG] Kickoff: '{_next.title}' (controller was idle)")
+                            await controller.play(_next)
+                    except Exception as _ke:
+                        logger.warning(f"[PLAYLIST BG] Kickoff error: {_ke}")
+
                 # [PHASE 6b] Track the task so we can cancel on stop()
                 bg_task = asyncio.create_task(_resolve_remaining())
                 controller._bg_resolve_task = bg_task
@@ -809,6 +828,25 @@ class Music(commands.Cog):
                                     if _count > 10:
                                         collected = gc.collect()
                                         logger.debug(f"[PLAY CMD] GC freed {collected} objects after YT batch")
+                                    # [PHASE 11] Race-condition fix: if track 1 already
+                                    # finished while we were populating the queue,
+                                    # and the controller is now idle, kick off the
+                                    # next track so the playlist doesn't stall.
+                                    # We give it a brief delay first so any
+                                    # _on_track_end handler for track 1 has time to
+                                    # settle (and observe an empty queue, going idle).
+                                    await asyncio.sleep(0.5)
+                                    if (
+                                        _count > 0
+                                        and controller.current_track is None
+                                        and controller.queue
+                                        and controller.vc
+                                        and controller.vc.is_connected()
+                                        and not getattr(controller, "_stopped", True)
+                                    ):
+                                        _next = controller.queue.pop(0)
+                                        logger.info(f"[PLAY CMD] BG resolve kickoff: '{_next.title}' (controller idle)")
+                                        await controller.play(_next)
                             except Exception as e:
                                 logger.error(f"[PLAY CMD BG] Fatal error in resolve_remaining_yt: {type(e).__name__}: {e}")
 
