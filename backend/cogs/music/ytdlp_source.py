@@ -97,14 +97,21 @@ def _get_ytdlp_auth_opts() -> dict:
 # gets blocked with "Sign in to confirm you're not a bot", we try the next.
 # Order matters: start with the most reliable for our setup, fall back to
 # exotic clients (android_vr, tv) which YouTube tends to monitor less.
+# [PHASE 9] Reordered fallback chain.
+# Put exotic clients first (android_vr, tv_embedded) which YouTube monitors
+# less aggressively than mweb/web. Original order tried mweb,web first and
+# burned 6 attempts before falling back to exotic clients — and even when
+# an exotic client returned info, the stream URL was often unusable because
+# we already exhausted attempts. Starting with the lighter-weight clients
+# avoids most bot-detection blocks entirely.
 # Each tuple: (client_name, requires_po_token)
 _DEFAULT_PLAYER_CLIENT_FALLBACKS = [
-    ("mweb", True),     # mobile web - first try, paired with web PO token
-    ("web", True),      # desktop web - needs PO token
-    ("android_vr", False),  # Android VR - rarely blocked, no PO token needed
-    ("android", False),     # Android app - good fallback
-    ("ios", False),         # iOS app - sometimes works
-    ("tv_embedded", False), # TV embedded player - very basic
+    ("android_vr", False),    # rarest detection, no PO needed
+    ("tv_embedded", False),   # TV embedded - very basic, often works
+    ("android", False),       # Android app - good general fallback
+    ("ios", False),           # iOS app - sometimes works
+    ("mweb", True),           # mobile web - last because heavy detection
+    ("web", True),            # desktop web - last, paired with web PO token
 ]
 
 
