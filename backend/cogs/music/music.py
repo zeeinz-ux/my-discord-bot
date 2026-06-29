@@ -262,11 +262,20 @@ class Music(commands.Cog):
             before_ch = before.channel
             after_ch = after.channel
             if before_ch and not after_ch and not controller._stopped:
-                if controller.current_track:
-                    logger.info(f"[RECOVERY] Bot disconnected from {before_ch.name}, attempting recovery")
-                    controller._recovery_task = asyncio.create_task(
-                        controller._connection_recovery(before_ch)
-                    )
+                # [PHASE 2] Debounce: skip if a recovery is already in flight,
+                # or if one just finished (give the controller 2s to settle).
+                existing = controller._recovery_task
+                if existing is not None and not existing.done():
+                    logger.debug(f"[RECOVERY] Already in flight for {before_ch.name}, skipping")
+                    return
+                # No current_track? Nothing to recover — log only.
+                if not controller.current_track and not os.path.isfile(controller._state_file):
+                    logger.info(f"[RECOVERY] Bot left {before_ch.name} but no track/state, skipping")
+                    return
+                logger.info(f"[RECOVERY] Bot disconnected from {before_ch.name}, attempting recovery")
+                controller._recovery_task = asyncio.create_task(
+                    controller._connection_recovery(before_ch)
+                )
             return
 
         if not controller.vc or not controller.vc.channel:

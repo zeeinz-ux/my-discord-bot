@@ -638,6 +638,7 @@ class MusicController:
         self._watchdog_task: Optional[asyncio.Task] = None
         self._recovery_task: Optional[asyncio.Task] = None
         self._recovery_attempts: int = 0
+        self._resume_task: Optional[asyncio.Task] = None  # [PHASE 2] tracks auto-resume after recovery
         self._stopped: bool = False
         self._state_file: str = "/tmp/discord_player_state.json"
         self._owner_id: Optional[int] = None
@@ -871,26 +872,139 @@ class MusicController:
         self._stop_alone_timer()
 
     async def _connection_recovery(self, target_channel, max_attempts=3):
+        """[PHASE 2] Graceful voice recovery.
+
+        Sequence:
+          1. Mark _stopped=True so user /play can't grab this controller mid-recovery.
+          2. Forcibly tear down any lingering voice client (old or partial connect).
+          3. Sleep to let any dying-ffmpeg _on_track_end callbacks land and be
+             dropped by the Phase 1 generation guard.
+          4. Connect a fresh voice client.
+          5. Restore from disk state file (_state_file), not from self.current_track
+             which may be stale.
+          6. Re-arm _stopped=False. Do NOT call play() directly — let the user or
+             _on_track_end drive playback. If state file has a track, resume via
+             a guarded call that respects _play_lock.
+
+        Failure mode: after max_attempts, cleanup UI and leave controller idle.
+        """
         self._recovery_attempts += 1
-        saved_track = self.current_track
-        saved_position = self.position
+        logger.info(f"[RECOVERY] Start (attempt {self._recovery_attempts}) for {target_channel.name}")
+
+        # Snapshot intent from state file BEFORE we start touching anything, so
+        # even if current_track gets nulled by a stale callback we know what to
+        # restore. _load_state returns None if file missing/corrupt.
+        intent = self._load_state()
+        intent_track_title = (intent or {}).get("track", {}).get("title") if intent else None
+        intent_position_ms = (intent or {}).get("position_ms", 0) if intent else 0
+
+        # Mark the controller as 'in recovery' — stops new plays from racing us
+        # and stops watchdog from killing a half-set-up player.
+        self._stopped = True
+
+        # Tear down any lingering voice client (the dying one or a partial
+        # connect from a previous attempt). Best-effort; ignore errors.
+        try:
+            if self.vc and self.vc.is_connected():
+                try:
+                    if self.vc.is_playing() or self.vc.is_paused():
+                        self.vc.stop()
+                except Exception:
+                    pass
+                await self.vc.disconnect(force=True)
+        except Exception as e:
+            logger.warning(f"[RECOVERY] Pre-cleanup disconnect error (ignored): {e}")
+        # Drop our reference so nothing tries to use it.
+        self.vc = None
+
+        # Let dying-ffmpeg _on_track_end callbacks drain. Phase 1's generation
+        # guard will drop them, but we still give them a moment to fire and be
+        # cleared so they don't race the new connect below.
+        await asyncio.sleep(1.0)
+
+        # Clear transitioning state so a connect failure here can be cleanly
+        # retried without stale _single_loop_track confusing seek/play.
+        self._single_loop_track = None
+
+        last_error = None
         for attempt in range(max_attempts):
             try:
-                logger.info(f"[RECOVERY] Mencoba koneksi ulang ({attempt + 1}/{max_attempts})")
+                logger.info(f"[RECOVERY] Connecting (attempt {attempt + 1}/{max_attempts})")
                 vc = await target_channel.connect(self_deaf=False)
                 self.vc = vc
                 self._recovery_attempts = 0
-                if saved_track:
-                    await self.play(saved_track)
-                    if saved_position > 3000:
-                        await asyncio.sleep(0.5)
-                        await self.seek(saved_position)
+                self._stopped = False
+                logger.info(f"[RECOVERY] Connected to {target_channel.name}")
+
+                # Re-arm the alone-pause watchdog if anyone is in the channel.
+                if vc.channel:
+                    humans = [m for m in vc.channel.members if not m.bot]
+                    if humans:
+                        self._start_alone_timer()
+
+                # Decide whether to auto-resume. Only resume if state file had a
+                # track that wasn't paused, and we didn't exceed 1 hour stale
+                # (avoid resuming days-old sessions).
+                should_resume = False
+                if intent and intent_track_title:
+                    paused = intent.get("paused", False)
+                    age_sec = time.time() - os.path.getmtime(self._state_file) if os.path.isfile(self._state_file) else 9999
+                    if not paused and age_sec < 3600:
+                        should_resume = True
+
+                if should_resume:
+                    # Schedule the resume AFTER current coroutine returns, so
+                    # the recovery function can exit cleanly and the bot's voice
+                    # handshake can fully settle. _play_lock will serialize this
+                    # against any user /play.
+                    async def _resume_after_recovery():
+                        try:
+                            uri = intent.get("track", {}).get("uri")
+                            if not uri:
+                                return
+                            logger.info(f"[RECOVERY] Resuming '{intent_track_title}' from {intent_position_ms}ms")
+                            track = await YtDlpSearcher.extract_info(uri)
+                            if not track:
+                                logger.warning(f"[RECOVERY] extract_info returned None for {uri}, skipping auto-resume")
+                                return
+                            # Use _play_locked directly so generation guard works.
+                            await self._play_locked(track)
+                            if intent_position_ms > 3000:
+                                await asyncio.sleep(0.5)
+                                await self.seek(intent_position_ms)
+                        except Exception as e:
+                            logger.error(f"[RECOVERY] Auto-resume failed: {e.__class__.__name__}: {e}")
+
+                    self._resume_task = asyncio.create_task(_resume_after_recovery())
+                else:
+                    logger.info(f"[RECOVERY] No resume (intent_track={intent_track_title!r}, paused={intent.get('paused') if intent else None})")
+
                 return
             except Exception as e:
-                logger.warning(f"[RECOVERY] Percobaan {attempt + 1} gagal: {e}")
+                last_error = e
+                logger.warning(f"[RECOVERY] Attempt {attempt + 1} failed: {e}")
+                # Best-effort cleanup of the partial connect, then back off.
+                try:
+                    if self.vc and self.vc.is_connected():
+                        await self.vc.disconnect(force=True)
+                except Exception:
+                    pass
+                self.vc = None
                 await asyncio.sleep(2)
+
+        # All attempts exhausted.
         self._recovery_attempts = 0
+        self._stopped = False  # let user take over manually with /play
+        logger.error(f"[RECOVERY] Gagal setelah {max_attempts} percobaan: {last_error}")
         await self._cleanup_np()
+        try:
+            if self.home:
+                await self.home.send(
+                    f"❌ Gagal reconnect ke voice channel setelah {max_attempts} percobaan. "
+                    "Bot idle — gunakan `/play` untuk memulai ulang."
+                )
+        except Exception:
+            pass
 
     def _save_state(self):
         if not self.current_track:
@@ -1291,6 +1405,9 @@ class MusicController:
         if self._recovery_task and not self._recovery_task.done():
             self._recovery_task.cancel()
             self._recovery_task = None
+        if self._resume_task and not self._resume_task.done():
+            self._resume_task.cancel()
+            self._resume_task = None
         self._recovery_attempts = 0
         await self._cleanup_current_file()
         await self._cleanup_np()
@@ -1316,6 +1433,9 @@ class MusicController:
         if self._recovery_task and not self._recovery_task.done():
             self._recovery_task.cancel()
             self._recovery_task = None
+        if self._resume_task and not self._resume_task.done():
+            self._resume_task.cancel()
+            self._resume_task = None
         await self._cleanup_current_file()
         await self._cleanup_np()
         if self.vc:
