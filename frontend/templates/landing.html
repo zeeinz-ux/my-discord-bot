@@ -15,8 +15,8 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/footer.css') }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='css/sakura.css') }}" />
 
-  <!-- Favicon placeholder -->
-  <link rel="icon" href="/logo.png" />
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}" />
+  <link rel="shortcut icon" href="{{ url_for('static', filename='logo.png') }}" />
 </head>
 <body>
 
@@ -442,7 +442,7 @@
       <div class="about-card" data-reveal style="margin-top: 3rem;">
         <div class="about-card-header">
           <div class="about-avatar">
-            <img src="{{ url_for('static', filename='logo.png') }}" alt="Hidden Hamlet Logo" width="64" height="64">
+            <img src="{{ url_for('static', filename='logo.png') }}" alt="Hidden Hamlet Logo" width="120" height="120" style="border-radius: 16px;">
           </div>
           <div>
             <h3>Hidden Hamlet</h3>
