@@ -23,11 +23,9 @@ if not logger.handlers:
 
 # Batas maksimum penarikan lagu dalam satu batch playlist (YouTube & Spotify)
 MAX_BATCH = 100
-# [PHASE 4] Cap the queue to prevent unbounded growth. Each YtDlpTrack is
-# small (~2KB) but with preloaded .opus files in cache and references to
-# search coroutines, memory can spiral. 200 covers any realistic user
-# session (a 4-hour playlist is ~100 tracks). Beyond that, refuse and log.
-MAX_QUEUE_SIZE = 200
+# [PHASE 6a] Hardening: tighter queue cap. 100 tracks = ~4 hours of music,
+# more than enough for one listening session. Beyond that, refuse.
+MAX_QUEUE_SIZE = 100
 
 from backend.utils.formatters import format_duration
 from backend.cogs.music.spotify_down import SpotifyResolver, ResolvedTrack, _extract_tracks_from_scripts
@@ -203,7 +201,12 @@ class Music(commands.Cog):
     async def _search_youtube_for_tracks_concurrent(
         self,
         tracks: list[ResolvedTrack],
-        max_concurrent: int = 2,
+        # [PHASE 6a] Hardening for Railway free tier (512MB).
+        # Lower default 2 -> 1 to keep yt-dlp subprocess count minimal.
+        # 1 yt-dlp subprocess = ~50-80MB; with 1 concurrent we stay under
+        # 100MB even at peak, leaving 400MB headroom for Discord.py +
+        # Firebase + Spotify resolver + queue + ffmpeg.
+        max_concurrent: int = 1,
     ) -> tuple[int, list[YtDlpTrack]]:
         added = 0
         playables: list[YtDlpTrack | None] = [None] * len(tracks)
@@ -545,7 +548,7 @@ class Music(commands.Cog):
                                     track_ids = list(dict.fromkeys(re.findall(r'(?:spotify:track:|/track/)([A-Za-z0-9]+)', html)))
                                     if track_ids:
                                         logger.info(f"[SPOTIFY FALLBACK] Found {len(track_ids)} track IDs via regex")
-                                        sem = asyncio.Semaphore(2)
+                                        sem = asyncio.Semaphore(1)
                                         async def fetch_oembed(tid):
                                             async with sem:
                                                 try:
@@ -677,47 +680,74 @@ class Music(commands.Cog):
                 )
                 await loading_msg.edit(content=None, embed=final_embed)
 
-                # Kirim sisa resolve ke background - urut sesuai playlist
-                # [PHASE 4] Lower concurrency from 5 -> 2 to reduce yt-dlp
-                # subprocess memory pressure. Railway free tier is 512MB; each
-                # yt-dlp subprocess holds ~50-80MB while running.
+                # Kirim sisa resolve ke background — urut sesuai playlist
+                # [PHASE 6a] Hardening for Railway free tier (512MB). Concurrency
+                # lowered to 1 so peak subprocess count is bounded.
                 async def _resolve_remaining():
-                    sem = asyncio.Semaphore(2)
-                    results: list[Optional[YtDlpTrack]] = [None] * len(remaining)
-
-                    async def load_one(idx: int, rt: ResolvedTrack):
-                        async with sem:
-                            results[idx] = await self._search_single_resolved(rt)
-
-                    await asyncio.gather(*[load_one(i, rt) for i, rt in enumerate(remaining)])
-                    for r in results:
-                        if r and len(controller.queue) < MAX_QUEUE_SIZE:
-                            controller.queue.append(r)
-                    skipped = len(remaining) - len(results)
-                    # [PHASE 4] Force GC to reclaim aiohttp session + yt-dlp
-                    # subprocess memory after a 100-track batch. Without this,
-                    # Railway free tier (512MB) gets OOM-killed around the
-                    # 14-minute mark.
-                    collected = gc.collect()
-                    logger.info(f"[PLAYLIST BG] Selesai: {len(results)} ditemukan, {skipped} skipped (gc freed {collected} objects)")
-
+                    # [PHASE 6b] Self-healing wrapper. If anything in the resolve
+                    # pipeline raises, we capture it instead of letting the
+                    # task die silently. The user still gets an updated embed
+                    # so they know the background resolve failed.
+                    resolve_errors: list[str] = []
                     try:
-                        embed = final_embed.copy()
-                        # [UI] Drop "▶️ Sekarang Memutar: ..." prefix when
-                        # background resolve finishes. Keep the skipped-count
-                        # warning if applicable, otherwise leave a neutral
-                        # status (the now-playing embed already shows what's
-                        # playing).
-                        if skipped:
-                            status = f"⚠️ {skipped} lagu tidak ditemukan di YouTube"
-                        else:
-                            status = f"✅ Semua lagu berhasil dimuat"
-                        embed.set_footer(text=status, icon_url=self.bot.user.display_avatar.url)
-                        await loading_msg.edit(embed=embed)
-                    except Exception:
-                        pass
+                        sem = asyncio.Semaphore(1)
+                        results: list[Optional[YtDlpTrack]] = [None] * len(remaining)
 
-                asyncio.create_task(_resolve_remaining())
+                        async def load_one(idx: int, rt: ResolvedTrack):
+                            async with sem:
+                                try:
+                                    results[idx] = await self._search_single_resolved(rt)
+                                except Exception as e:
+                                    resolve_errors.append(f"{rt.name}: {type(e).__name__}")
+                                    logger.warning(f"[PLAYLIST BG] Resolve error for '{rt.name}': {e}")
+
+                        await asyncio.gather(*[load_one(i, rt) for i, rt in enumerate(remaining)], return_exceptions=True)
+                        for r in results:
+                            if r and len(controller.queue) < MAX_QUEUE_SIZE:
+                                controller.queue.append(r)
+                        skipped = len(remaining) - len(results)
+                        # [PHASE 4] Force GC to reclaim aiohttp session + yt-dlp
+                        # subprocess memory after a 100-track batch. Without this,
+                        # Railway free tier (512MB) gets OOM-killed around the
+                        # 14-minute mark.
+                        collected = gc.collect()
+                        logger.info(f"[PLAYLIST BG] Selesai: {len(results)} ditemukan, {skipped} skipped (gc freed {collected} objects)")
+
+                        try:
+                            embed = final_embed.copy()
+                            # [PHASE 6c] Better user feedback: distinguish between
+                            # 'skipped' (couldn't find on YouTube) and 'errored'
+                            # (resolver itself threw). Show both counts.
+                            if resolve_errors:
+                                status = f"✅ Loaded | ⚠️ {skipped} not found | ❌ {len(resolve_errors)} errors"
+                                # Show first few errors as tooltip-ish info
+                                status += "\n" + "\n".join(resolve_errors[:3])[:300]
+                            elif skipped:
+                                status = f"⚠️ {skipped} lagu tidak ditemukan di YouTube"
+                            else:
+                                status = f"✅ Semua lagu berhasil dimuat"
+                            embed.set_footer(text=status, icon_url=self.bot.user.display_avatar.url)
+                            await loading_msg.edit(embed=embed)
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        # [PHASE 6b] Top-level safety net: catch anything we
+                        # missed so the task doesn't vanish with an unhandled
+                        # exception. Log + update embed so user knows.
+                        logger.error(f"[PLAYLIST BG] Fatal error in resolve_remaining: {type(e).__name__}: {e}")
+                        try:
+                            embed = final_embed.copy()
+                            embed.set_footer(
+                                text=f"❌ Background resolve gagal: {type(e).__name__}",
+                                icon_url=self.bot.user.display_avatar.url,
+                            )
+                            await loading_msg.edit(embed=embed)
+                        except Exception:
+                            pass
+
+                # [PHASE 6b] Track the task so we can cancel on stop()
+                bg_task = asyncio.create_task(_resolve_remaining())
+                controller._bg_resolve_task = bg_task
                 return
 
         # ==========================================================
@@ -757,21 +787,34 @@ class Music(commands.Cog):
                         logger.info(f"[PLAY CMD] Playing first track immediately: {first_track.title}")
 
                         async def _resolve_remaining_yt():
-                            _playlist = await YtDlpSearcher.extract_playlist(search_query)
-                            if _playlist and _playlist.tracks:
-                                _count = 0
-                                for _t in _playlist.tracks[:MAX_BATCH]:
-                                    if _t.uri == _first_url or _t.webpage_url == first_track.webpage_url:
-                                        continue
-                                    if len(controller.queue) < MAX_QUEUE_SIZE:
-                                        controller.queue.append(_t)
-                                        _count += 1
-                                    else:
-                                        logger.info(f"[PLAY CMD] Queue penuh ({MAX_QUEUE_SIZE}), skip sisa playlist")
-                                        break
-                                logger.info(f"[PLAY CMD] Background: added {_count} more tracks from {_playlist.name}")
+                            # [PHASE 6b] Self-healing wrapper around the YT
+                            # playlist background resolver. Same pattern as
+                            # _resolve_remaining: capture errors, log them,
+                            # don't silently die.
+                            try:
+                                _playlist = await YtDlpSearcher.extract_playlist(search_query)
+                                if _playlist and _playlist.tracks:
+                                    _count = 0
+                                    for _t in _playlist.tracks[:MAX_BATCH]:
+                                        if _t.uri == _first_url or _t.webpage_url == first_track.webpage_url:
+                                            continue
+                                        if len(controller.queue) < MAX_QUEUE_SIZE:
+                                            controller.queue.append(_t)
+                                            _count += 1
+                                        else:
+                                            logger.info(f"[PLAY CMD] Queue penuh ({MAX_QUEUE_SIZE}), skip sisa playlist")
+                                            break
+                                    logger.info(f"[PLAY CMD] Background: added {_count} more tracks from {_playlist.name}")
+                                    # [PHASE 4] Periodic GC after big batch.
+                                    if _count > 10:
+                                        collected = gc.collect()
+                                        logger.debug(f"[PLAY CMD] GC freed {collected} objects after YT batch")
+                            except Exception as e:
+                                logger.error(f"[PLAY CMD BG] Fatal error in resolve_remaining_yt: {type(e).__name__}: {e}")
 
-                        asyncio.create_task(_resolve_remaining_yt())
+                        # [PHASE 6b] Track the task so we can cancel on stop()
+                        bg_task_yt = asyncio.create_task(_resolve_remaining_yt())
+                        controller._bg_resolve_task = bg_task_yt
 
                         # [UI] Skip user-facing text reply - the now-playing embed
                         # already shows up automatically via _update_now_playing(),
@@ -803,6 +846,15 @@ class Music(commands.Cog):
                     msg = f"✅ Playlist ditambahkan! ({added} lagu dari {playlist.name})"
                     if len(playlist.tracks) > MAX_BATCH:
                         msg += f" (Dibatasi {MAX_BATCH})"
+                    # [PHASE 6c] Honest feedback: distinguish 'added' from
+                    # 'requested'. Some YouTube Mix playlists return metadata
+                    # for tracks that turn out to be unavailable (deleted,
+                    # region-locked, bot-flagged). If we added fewer than
+                    # MAX_BATCH, tell the user so they're not surprised when
+                    # playback skips tracks mid-playlist.
+                    if added < len(playlist.tracks[:MAX_BATCH]):
+                        diff = min(MAX_BATCH, len(playlist.tracks)) - added
+                        msg += f"\n⚠️ {diff} track tidak tersedia di YouTube"
                     await ctx.send(msg)
                     return
                 else:
@@ -1318,8 +1370,8 @@ class Music(commands.Cog):
         controller = self.get_controller(ctx.guild.id)
         added = 0
         failed = 0
-        # [PHASE 4] Lower concurrency from 5 -> 2 for memory.
-        semaphore = asyncio.Semaphore(2)
+        # [PHASE 6a] Hardening: concurrency 1 to bound memory.
+        semaphore = asyncio.Semaphore(1)
 
         async def load_single_track(t):
             nonlocal added, failed

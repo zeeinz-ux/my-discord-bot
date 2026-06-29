@@ -639,6 +639,7 @@ class MusicController:
         self._recovery_task: Optional[asyncio.Task] = None
         self._recovery_attempts: int = 0
         self._resume_task: Optional[asyncio.Task] = None  # [PHASE 2] tracks auto-resume after recovery
+        self._bg_resolve_task: Optional[asyncio.Task] = None  # [PHASE 6b] track playlist background resolve
         self._stopped: bool = False
         self._state_file: str = "/tmp/discord_player_state.json"
         self._owner_id: Optional[int] = None
@@ -982,11 +983,12 @@ class MusicController:
         self._watchdog_task = asyncio.create_task(self._watchdog_loop(timeout))
 
     async def _sequential_preload(self):
-        # [PHASE 4] Lower from 3 -> 2 tracks ahead. Each preloaded .opus
-        # is 3-5MB; 3 tracks = ~15MB disk I/O in flight, plus the aiohttp
-        # session holds ~2MB per request. Less eager preloading reduces
-        # memory pressure on Railway free tier (512MB).
-        for track in list(self.queue[:2]):
+        # [PHASE 6a] Hardening: pre-download only 1 track ahead (was 2 in
+        # Phase 4, 3 originally). Each preloaded .opus is 3-5MB; minimal
+        # disk I/O keeps memory headroom for the actual playback path.
+        # Tradeoff: brief silence between tracks on slow networks, but
+        # the bot stays well under Railway free tier 512MB limit.
+        for track in list(self.queue[:1]):
             await self._preload_next(track)
 
     async def pause_for(self, reason: str = "manual"):
@@ -1593,6 +1595,9 @@ class MusicController:
         if self._resume_task and not self._resume_task.done():
             self._resume_task.cancel()
             self._resume_task = None
+        if self._bg_resolve_task and not self._bg_resolve_task.done():  # [PHASE 6b]
+            self._bg_resolve_task.cancel()
+            self._bg_resolve_task = None
         self._recovery_attempts = 0
         await self._cleanup_current_file()
         await self._cleanup_np()
@@ -1621,6 +1626,9 @@ class MusicController:
         if self._resume_task and not self._resume_task.done():
             self._resume_task.cancel()
             self._resume_task = None
+        if self._bg_resolve_task and not self._bg_resolve_task.done():  # [PHASE 6b]
+            self._bg_resolve_task.cancel()
+            self._bg_resolve_task = None
         await self._cleanup_current_file()
         await self._cleanup_np()
         if self.vc:

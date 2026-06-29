@@ -179,6 +179,36 @@ async def setup_hook():
 bot.setup_hook = setup_hook
 # ===========================================================================
 
+# [PHASE 6a] Memory monitor for Railway free tier (512MB).
+# Reads VmRSS from /proc/self/status (Linux only — Railway is Linux).
+# Logs every 5 minutes so we can spot memory creep before OOM kills us.
+import os as _os
+async def _memory_monitor():
+    while True:
+        try:
+            await asyncio.sleep(300)  # 5 min
+            with open(f"/proc/{_os.getpid()}/status") as f:
+                rss_kb = 0
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        rss_kb = int(line.split()[1])
+                        break
+            rss_mb = rss_kb / 1024
+            # Thresholds tuned for 512MB Railway free tier:
+            #   < 300MB: healthy
+            #   300-400MB: warning, log every cycle
+            #   > 400MB: critical, log every cycle + trigger aggressive GC
+            if rss_mb > 300:
+                import gc as _gc
+                collected = _gc.collect()
+                print(f"[MEMORY] ⚠️ {rss_mb:.1f}MB RSS (gc freed {collected} objects)", flush=True)
+            else:
+                print(f"[MEMORY] ✅ {rss_mb:.1f}MB RSS", flush=True)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[MEMORY] Monitor error: {e}", flush=True)
+
 @tasks.loop(seconds=20.0)
 async def sync_music_to_dashboard():
     guilds_list = [
@@ -528,6 +558,11 @@ async def on_ready():
     print(f"[STATUS] 🤖 {bot.user.name} SEKARANG SUDAH ONLINE!", flush=True)
     print(f"[STATUS] Terhubung ke {len(bot.guilds)} server Discord.", flush=True)
     print("=" * 50, flush=True)
+
+    # [PHASE 6a] Start memory monitor task (Railway free tier = 512MB).
+    if not hasattr(bot, "_memory_monitor_task") or bot._memory_monitor_task.done():
+        bot._memory_monitor_task = asyncio.create_task(_memory_monitor())
+        print("[MEMORY] Monitor started (5 min interval)", flush=True)
 
     try:
         synced = await bot.tree.sync()
