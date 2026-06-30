@@ -1062,17 +1062,28 @@ class Music(commands.Cog):
             controller.home = ctx.channel
         await controller._update_now_playing()
 
-        embed = discord.Embed(title="🎶 Music Queue", color=discord.Color.purple())
+        color = discord.Color.from_str("#5865F2")
+        embed = discord.Embed(title=f"🎶 Music Queue", color=color)
+        embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
 
         try:
             if controller.current_track:
                 loop_emoji = {"single": "🔁", "queue": "🔂", "off": ""}.get(controller.loop_mode, "")
-                title = controller.current_track.title or "Unknown"
+                track = controller.current_track
+                title = track.title or "Unknown"
+                url = track.uri or track.webpage_url or ""
+                title_str = f"[{title}]({url})" if url else f"**{title}**"
+                duration_str = format_duration(track.duration) if track.duration else "∞"
                 embed.add_field(
                     name=f"▶️ Now Playing {loop_emoji}",
-                    value=f"**{title}**\n`{format_duration(controller.current_track.duration)}`",
+                    value=f"{title_str}\n`⏱ {duration_str}`",
                     inline=False,
                 )
+                if track.author and track.author != "Unknown":
+                    embed.add_field(name="👤 Artist", value=track.author, inline=True)
+                embed.add_field(name="🔁 Loop", value=controller.loop_mode.title(), inline=True)
+                if track.artwork:
+                    embed.set_thumbnail(url=track.artwork)
 
             items = controller.queue
             if items:
@@ -1081,15 +1092,21 @@ class Music(commands.Cog):
                 for i, track in enumerate(items[:15], 1):
                     t_title = track.title or "Unknown"
                     duration = format_duration(track.duration) if track.duration else "?"
-                    display = t_title[:40]
-                    if len(t_title) > 40:
-                        display += "..."
-                    queue_text += f"`{i:02d}.` {display} (`{duration}`)\n"
+                    display = t_title[:48]
+                    if len(t_title) > 48:
+                        display += "…"
+                    queue_text += f"`{i:02d}.` **{display}** · `{duration}`\n"
 
-                embed.add_field(name="⏭️ Up Next", value=queue_text or "...", inline=False)
-                embed.set_footer(text=f"{len(items)} lagu | Total durasi: {format_duration(total_ms)}")
+                if len(items) > 15:
+                    queue_text += f"\n*— plus {len(items) - 15} more —*"
+
+                embed.add_field(name="⏭️ Up Next", value=queue_text, inline=False)
+                embed.set_footer(
+                    text=f"{len(items)} song{'s' if len(items) != 1 else ''} · {format_duration(total_ms)} total",
+                    icon_url="https://cdn.discordapp.com/emojis/1009754836318621776.webp"
+                )
             else:
-                embed.set_footer(text="Queue kosong - tambah lagu dengan /play")
+                embed.set_footer(text="Queue is empty — add songs with /play")
         except Exception as e:
             logger.info(f"[QUEUE ERROR] {e}")
             await ctx.send("❌ Gagal menampilkan queue.")
