@@ -1382,6 +1382,26 @@ class MusicController:
         async with self._play_lock:
             await self._play_locked(track)
 
+    async def _get_direct_url(self, url: str) -> Optional[str]:
+        """Extract direct audio stream URL from yt-dlp (fast, no download)."""
+        try:
+            loop = asyncio.get_event_loop()
+            base_opts = {
+                "quiet": True, "no_warnings": True,
+                "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best",
+                "skip_download": True,
+                **_AUTH_OPTS,
+            }
+            info = await loop.run_in_executor(
+                _YTDLP_EXECUTOR,
+                lambda: _extract_info_with_fallback(url, base_opts)
+            )
+            if info:
+                return info.get("url")
+        except Exception as e:
+            logger.warning(f"[GET_STREAM_URL] Failed: {e}")
+        return None
+
     async def _play_locked(self, track: YtDlpTrack):
         if not track.artwork and (track.webpage_url or track.uri):
             enriched = await YtDlpSearcher.extract_info(track.webpage_url or track.uri)
@@ -1393,9 +1413,6 @@ class MusicController:
                 if enriched.duration:
                     track.duration = enriched.duration
 
-        # [PHASE 1] Bump generation BEFORE any vc.stop() so any in-flight
-        # _on_track_end callback from a dying ffmpeg process will see a
-        # stale generation and bail out instead of recursively re-entering play().
         self._play_generation += 1
         my_generation = self._play_generation
 
@@ -1406,9 +1423,6 @@ class MusicController:
             self._queue_history.append(track)
 
         if self.vc.is_playing() or self.vc.is_paused():
-            # [PHASE 1] Mark slot as transitioning BEFORE stopping the old
-            # ffmpeg. If its _on_track_end fires while we're still setting
-            # up the new track, the generation check will reject it.
             self.current_track = None
             self.vc.stop()
             logger.info("[DEBUG PLAY] Menghentikan lagu sebelumnya.")
@@ -1419,36 +1433,11 @@ class MusicController:
             await self._play_next()
             return
 
-        file_path = self._preloaded_file if self._preloaded_for == url else None
-
-        if file_path and os.path.isfile(file_path):
-            logger.info(f"[DEBUG PLAY] Memakai file cache pre-load: {file_path}")
-        else:
-            logger.info(f"[DEBUG PLAY] Mulai mengunduh: {url}")
-            file_path = await self._download_track(url)
-
-        if not file_path or not os.path.isfile(file_path):
-            logger.error(f"[ERROR PLAY] Gagal mengunduh berkas audio untuk {url}")
-            await self._cleanup_current_file()
-            await self._play_next()
-            return
-
-        # [PHASE 7] Clean up the previous track's file BEFORE assigning the
-        # new one to self._current_file. Otherwise the old file becomes
-        # orphaned on disk (referenced only by the soon-to-be-overwritten
-        # _current_file slot) until the next _cleanup_current_file() call,
-        # which then deletes the new file by mistake.
-        await self._cleanup_current_file()
-        self._current_file = file_path
-        logger.info(f"[DEBUG PLAY] Menyiapkan audio stream: {file_path}")
-
         if not shutil.which("ffmpeg") and not os.path.isfile(FFMPEG_PATH):
             logger.critical(f"[CRITICAL] Mesin FFmpeg tidak ditemukan di {FFMPEG_PATH}")
-            await self._cleanup_current_file()
             await self._play_next()
             return
 
-        # [VOICE GUARD] Pastikan voice client masih terhubung
         if not self.vc or not self.vc.is_connected():
             logger.warning(f"[VOICE GUARD] Voice client tidak terhubung, mencoba reconnect...")
             if self.home and self.home.guild:
@@ -1459,27 +1448,64 @@ class MusicController:
                             logger.info("[VOICE GUARD] Reconnect sukses")
                         except Exception as e:
                             logger.error(f"[VOICE GUARD] Reconnect gagal: {e}")
-                            await self._cleanup_current_file()
                             await self._play_next()
                             return
                         break
                 else:
                     logger.error("[VOICE GUARD] Voice channel tidak ditemukan, skip")
-                    await self._cleanup_current_file()
                     await self._play_next()
                     return
             else:
                 logger.error("[VOICE GUARD] Tidak bisa reconnect (no guild/home)")
-                await self._cleanup_current_file()
                 await self._play_next()
                 return
 
+        # Check preloaded cache first
+        file_path = self._preloaded_file if self._preloaded_for == url else None
+        use_cache = file_path and os.path.isfile(file_path)
+
+        if use_cache:
+            await self._cleanup_current_file()
+            self._current_file = file_path
+            logger.info(f"[DEBUG PLAY] Memakai file cache: {file_path}")
+            audio_source = file_path
+            is_stream = False
+        else:
+            # Try streaming directly via FFmpeg (no download wait)
+            logger.info(f"[DEBUG PLAY] Mencoba stream langsung: {url}")
+            stream_url = await self._get_direct_url(url)
+            if stream_url:
+                logger.info(f"[DEBUG PLAY] Stream URL didapat, play via FFmpeg")
+                audio_source = stream_url
+                is_stream = True
+                # Start background download for caching future plays
+                asyncio.create_task(self._download_track(url))
+            else:
+                # Fallback: download full file
+                logger.info(f"[DEBUG PLAY] Stream gagal, unduh file: {url}")
+                file_path = await self._download_track(url)
+                if not file_path or not os.path.isfile(file_path):
+                    logger.error(f"[ERROR PLAY] Gagal mengunduh: {url}")
+                    await self._cleanup_current_file()
+                    await self._play_next()
+                    return
+                await self._cleanup_current_file()
+                self._current_file = file_path
+                audio_source = file_path
+                is_stream = False
+
         try:
-            source = discord.FFmpegPCMAudio(file_path, executable=FFMPEG_PATH)
+            if is_stream:
+                before_opts = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+                source = discord.FFmpegPCMAudio(
+                    audio_source, executable=FFMPEG_PATH,
+                    before_options=before_opts
+                )
+            else:
+                source = discord.FFmpegPCMAudio(audio_source, executable=FFMPEG_PATH)
+
             vol_source = discord.PCMVolumeTransformer(source, volume=self._volume / 100.0)
 
-            # [PHASE 1] Bind generation to the after= callback via closure so
-            # stale callbacks from a previous ffmpeg can be detected and dropped.
             self.vc.play(vol_source, after=lambda err, gen=my_generation: self._on_track_end_wrapper(err, gen))
 
             self._start_time = time.time()
@@ -1491,11 +1517,12 @@ class MusicController:
             asyncio.create_task(self._sequential_preload())
             await self._update_now_playing()
             self._start_np_updater()
-            logger.info("[DEBUG PLAY] Pemutaran audio berhasil dimulai!")
+            logger.info(f"[DEBUG PLAY] Pemutaran {'stream' if is_stream else 'file'} berhasil!")
         except Exception as e:
-            logger.critical(f"[CRITICAL ERROR PLAY] FFmpeg gagal berputar: {e}")
+            logger.critical(f"[CRITICAL ERROR PLAY] FFmpeg gagal: {e}")
             traceback.print_exc()
-            await self._cleanup_current_file()
+            if self._current_file:
+                await self._cleanup_current_file()
             if self.vc:
                 try:
                     self.vc.stop()
