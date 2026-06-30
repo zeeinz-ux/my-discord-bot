@@ -641,11 +641,11 @@ class Music(commands.Cog):
                 # Simpen semua resolved tracks buat auto-load nanti
                 controller._playlist_url = search_query
                 controller._playlist_tracks = resolved_tracks  # all tracks
-                controller._playlist_index = 0
                 controller._playlist_total = original_total_tracks
                 batch = resolved_tracks[:MAX_BATCH]
                 total_tracks = len(batch)
                 resolved_tracks = batch
+                controller._playlist_index = total_tracks  # skip batch yg sudah diambil
                 logger.info(f"[SPOTIFY {spotify_type.upper()}] {original_total_tracks} total, batch pertama {total_tracks} via {source}")
 
                 # spotify_down → YouTube search concurrent (15 paralel)
