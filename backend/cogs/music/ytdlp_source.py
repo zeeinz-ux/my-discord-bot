@@ -58,22 +58,28 @@ else:
     COOKIES_FILE = os.getenv("COOKIES_FILE", _COOKIES_DEFAULT)
 
 COOKIES_FROM_BROWSER = os.getenv("COOKIES_FROM_BROWSER", "")
-PO_TOKEN = os.getenv("YOUTUBE_PO_TOKEN", "")
+PO_TOKEN = ""
 
-# Auto-generate PO token via bgutil-pot jika tidak di-set via env var
+# Auto-generate PO token via bgutil-pot — always try fresh token first,
+# stale env var token causes "Sign in to confirm" errors.
+try:
+    _result = subprocess.run(
+        ["bgutil-pot", "generate", "web"],
+        capture_output=True, text=True, timeout=30
+    )
+    if _result.returncode == 0:
+        _token = _result.stdout.strip()
+        if _token:
+            PO_TOKEN = _token
+            logger.info(f"[YTDLP INIT] PO token auto-generated via bgutil-pot")
+except Exception as _e:
+    logger.info(f"[YTDLP INIT] bgutil-pot not available or failed: {_e}")
+
+# Fallback ke env var jika bgutil-pot gagal
 if not PO_TOKEN:
-    try:
-        _result = subprocess.run(
-            ["bgutil-pot", "generate", "web"],
-            capture_output=True, text=True, timeout=30
-        )
-        if _result.returncode == 0:
-            _token = _result.stdout.strip()
-            if _token:
-                PO_TOKEN = _token
-                logger.info(f"[YTDLP INIT] PO token auto-generated via bgutil-pot")
-    except Exception as _e:
-        logger.info(f"[YTDLP INIT] bgutil-pot not available or failed: {_e}")
+    PO_TOKEN = os.getenv("YOUTUBE_PO_TOKEN", "")
+    if PO_TOKEN:
+        logger.info("[YTDLP INIT] PO token fallback ke YOUTUBE_PO_TOKEN env var")
 
 logger.info(f"[YTDLP INIT] YOUTUBE_API_KEY={'SET' if os.getenv('YOUTUBE_API_KEY') else 'NOT SET'}")
 logger.info(f"[YTDLP INIT] YOUTUBE_PO_TOKEN={'SET' if PO_TOKEN else 'NOT SET'}")
@@ -1877,6 +1883,9 @@ class MusicController:
         self._single_loop_track = None
         self._last_track_id = None
         self.queue.clear()
+        self._playlist_tracks.clear()
+        self._playlist_index = 0
+        self._play_generation += 1
         self._clear_state()
         if self.vc:
             self.vc.stop()
@@ -1902,6 +1911,10 @@ class MusicController:
         await self._cleanup_current_file()
         await self._cleanup_preloaded_file()
         await self._cleanup_np()
+        self.queue.clear()
+        self._playlist_tracks.clear()
+        self._playlist_index = 0
+        self._play_generation += 1
         if self.vc:
             self.vc.stop()
             try:
