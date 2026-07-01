@@ -101,8 +101,8 @@ class AIChat(commands.Cog):
             return
       
         timeout = aiohttp.ClientTimeout(
-            total=25,
-            connect=10
+            total=45,
+            connect=15
         )
       
         self.session = aiohttp.ClientSession(
@@ -284,7 +284,7 @@ class AIChat(commands.Cog):
     
     @tenacity.retry(
         wait=tenacity.wait_exponential(min=1, max=2), 
-        stop=tenacity.stop_after_attempt(2),
+        stop=tenacity.stop_after_attempt(1),
         retry=tenacity.retry_if_result(lambda res: res[1] is False), # <--- PAKAI KOMA!
         retry_error_callback=return_failure_tuple
     )
