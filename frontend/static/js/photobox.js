@@ -297,6 +297,20 @@
     });
   });
 
+  // Layout style buttons (picker page)
+  document.querySelectorAll('.pb-layout-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      applyLayoutStyle(btn.dataset.layout);
+    });
+  });
+
+  // Live layout buttons (camera page)
+  document.querySelectorAll('.live-layout-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      applyLayoutStyle(btn.dataset.layout);
+    });
+  });
+
   // ═══════════════════════════════════════════════
   // CAMERA
   // ═══════════════════════════════════════════════
@@ -354,38 +368,30 @@
   }
 
   // ═══════════════════════════════════════════════
-  // LAYOUT DEFINITIONS (collage-style)
+  // LAYOUT DEFINITIONS (multi-style)
   // ═══════════════════════════════════════════════
   const LAYOUTS = {
-    1: [
-      { x: 0, y: 0, w: 1, h: 1 },
-    ],
-    2: [
-      { x: 0, y: 0, w: 1, h: 0.5 },
-      { x: 0, y: 0.5, w: 1, h: 0.5 },
-    ],
-    3: [
-      { x: 0, y: 0, w: 1, h: 0.38 },
-      { x: 0, y: 0.38, w: 0.5, h: 0.62 },
-      { x: 0.5, y: 0.38, w: 0.5, h: 0.62 },
-    ],
-    4: [
-      { x: 0, y: 0, w: 1, h: 0.3 },
-      { x: 0, y: 0.3, w: 0.5, h: 0.4 },
-      { x: 0.5, y: 0.3, w: 0.5, h: 0.4 },
-      { x: 0, y: 0.7, w: 1, h: 0.3 },
-    ],
-    5: [
-      { x: 0, y: 0, w: 0.5, h: 0.5 },
-      { x: 0.5, y: 0, w: 0.5, h: 0.5 },
-      { x: 0, y: 0.5, w: 0.5, h: 0.5 },
-      { x: 0.5, y: 0.5, w: 0.5, h: 0.5 },
-      { x: 0, y: 1, w: 1, h: 0.25 },
-    ],
+    strip: {
+      1: [ { x: 0, y: 0, w: 1, h: 1 } ],
+      2: [ { x: 0, y: 0, w: 1, h: 0.5 }, { x: 0, y: 0.5, w: 1, h: 0.5 } ],
+      3: [ { x: 0, y: 0, w: 1, h: 1/3 }, { x: 0, y: 1/3, w: 1, h: 1/3 }, { x: 0, y: 2/3, w: 1, h: 1/3 } ],
+      4: [ { x: 0, y: 0, w: 1, h: 0.25 }, { x: 0, y: 0.25, w: 1, h: 0.25 }, { x: 0, y: 0.5, w: 1, h: 0.25 }, { x: 0, y: 0.75, w: 1, h: 0.25 } ],
+      5: [ { x: 0, y: 0, w: 1, h: 0.2 }, { x: 0, y: 0.2, w: 1, h: 0.2 }, { x: 0, y: 0.4, w: 1, h: 0.2 }, { x: 0, y: 0.6, w: 1, h: 0.2 }, { x: 0, y: 0.8, w: 1, h: 0.2 } ],
+    },
+    collage: {
+      1: [ { x: 0, y: 0, w: 1, h: 1 } ],
+      2: [ { x: 0, y: 0, w: 1, h: 0.5 }, { x: 0, y: 0.5, w: 1, h: 0.5 } ],
+      3: [ { x: 0, y: 0, w: 1, h: 0.38 }, { x: 0, y: 0.38, w: 0.5, h: 0.62 }, { x: 0.5, y: 0.38, w: 0.5, h: 0.62 } ],
+      4: [ { x: 0, y: 0, w: 1, h: 0.3 }, { x: 0, y: 0.3, w: 0.5, h: 0.4 }, { x: 0.5, y: 0.3, w: 0.5, h: 0.4 }, { x: 0, y: 0.7, w: 1, h: 0.3 } ],
+      5: [ { x: 0, y: 0, w: 0.5, h: 0.5 }, { x: 0.5, y: 0, w: 0.5, h: 0.5 }, { x: 0, y: 0.5, w: 0.5, h: 0.5 }, { x: 0.5, y: 0.5, w: 0.5, h: 0.5 }, { x: 0, y: 1, w: 1, h: 0.25 } ],
+    },
   };
 
+  let currentLayoutStyle = 'collage';
+
   function getLayout(count) {
-    return LAYOUTS[count] || LAYOUTS[3];
+    const s = LAYOUTS[currentLayoutStyle];
+    return (s && s[count]) || LAYOUTS.strip[count] || LAYOUTS.strip[3];
   }
 
   function getLayoutMaxY(count) {
@@ -396,6 +402,16 @@
       if (b > maxY) maxY = b;
     });
     return maxY;
+  }
+
+  function applyLayoutStyle(style) {
+    if (!LAYOUTS[style] || style === currentLayoutStyle) return;
+    currentLayoutStyle = style;
+    document.querySelectorAll('.live-layout-btn').forEach((b) => b.classList.toggle('active', b.dataset.layout === style));
+    document.querySelectorAll('.pb-layout-btn').forEach((b) => b.classList.toggle('active', b.dataset.layout === style));
+    if (states.camera && !states.camera.classList.contains('hidden')) {
+      renderCameraGrid();
+    }
   }
 
   // ═══════════════════════════════════════════════

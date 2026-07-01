@@ -51,6 +51,19 @@
           </button>
         </div>
 
+        <!-- Layout Style Picker -->
+        <p class="pb-picker-sub" style="margin-top: 0.3rem;">gaya layout?</p>
+        <div class="pb-layout-row" id="pbLayoutRow">
+          <button class="pb-layout-btn" data-layout="strip">
+            <span class="layout-icon">⬜<br/>⬜</span>
+            <span class="layout-label">Strip</span>
+          </button>
+          <button class="pb-layout-btn active" data-layout="collage">
+            <span class="layout-icon">▤<br/>▦▦</span>
+            <span class="layout-label">Collage</span>
+          </button>
+        </div>
+
         <!-- Count Picker -->
         <p class="pb-picker-sub" style="margin-top: 0.3rem;">berapa banyak foto?</p>
         <div class="pb-picker-grid">
@@ -120,6 +133,13 @@
               <button class="live-count-btn active" data-count="3">3</button>
               <button class="live-count-btn" data-count="4">4</button>
               <button class="live-count-btn" data-count="5">5</button>
+            </div>
+          </div>
+          <div class="pb-live-group">
+            <span class="live-label">Layout</span>
+            <div class="pb-live-layout">
+              <button class="live-layout-btn" data-layout="strip" title="Strip">⬜⬜</button>
+              <button class="live-layout-btn active" data-layout="collage" title="Collage">▤▦</button>
             </div>
           </div>
         </div>
