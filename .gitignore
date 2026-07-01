@@ -74,6 +74,9 @@ flask_session/
 # Music backup
 music_backup/
 
+# Agent instructions
+AGENTS.md
+
 # Archives
 *.zip
 *.tar.gz
