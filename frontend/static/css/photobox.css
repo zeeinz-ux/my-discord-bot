@@ -460,6 +460,36 @@ body {
   transition: color 0.4s ease;
 }
 
+/* ── Live preview strip ── */
+.pb-live-preview {
+  margin-top: 0.8rem;
+  text-align: center;
+}
+
+.pb-preview-header {
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #ccc;
+  margin-bottom: 0.4rem;
+}
+
+.pb-preview-canvas-wrap {
+  display: inline-flex;
+  border-radius: 10px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  overflow: hidden;
+  max-height: 180px;
+  transition: max-height 0.3s ease;
+}
+
+#pbPreviewCanvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
 /* ── Live switcher row ── */
 .pb-live-row {
   display: flex;

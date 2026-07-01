@@ -20,6 +20,7 @@
 
   const video = $('pbVideo');
   const canvas = $('pbCanvas');
+  const previewCanvas = $('pbPreviewCanvas');
   const countdownNum = $('pbCountdownNum');
   const countdownLabel = $('pbCountdownLabel');
   const errorText = $('pbErrorText');
@@ -172,6 +173,8 @@
     liveDots.forEach((dot) => {
       dot.classList.toggle('active', dot.dataset.theme === themeId);
     });
+
+    updateLivePreview();
   }
 
   // ═══════════════════════════════════════════════
@@ -202,6 +205,10 @@
     Object.keys(states).forEach((key) => {
       states[key].classList.toggle('hidden', key !== name);
     });
+    const preview = $('pbLivePreview');
+    if (preview) {
+      preview.style.display = name === 'camera' ? 'block' : 'none';
+    }
   }
 
   function sleep(ms) {
@@ -279,6 +286,7 @@
     buildStepIndicator(TOTAL_SHOTS);
     updateStep(1);
     showState('camera');
+    setTimeout(updateLivePreview, 50);
   });
 
   // Live theme dots (camera page)
@@ -299,6 +307,7 @@
       buildStepIndicator(TOTAL_SHOTS);
       updateStep(1);
       showState('camera');
+      setTimeout(updateLivePreview, 50);
     });
   });
 
@@ -555,6 +564,58 @@
     ctx.closePath();
   }
 
+  function createPlaceholder() {
+    const c = document.createElement('canvas');
+    c.width = 320;
+    c.height = 240;
+    const cx = c.getContext('2d');
+    cx.fillStyle = '#f0f0f2';
+    cx.beginPath();
+    roundRect(cx, 0, 0, 320, 240, 12);
+    cx.fill();
+    cx.fillStyle = '#ddd';
+    cx.font = '48px sans-serif';
+    cx.textAlign = 'center';
+    cx.textBaseline = 'middle';
+    cx.fillText('🖼️', 160, 120);
+    cx.fillStyle = '#ccc';
+    cx.font = '14px Nunito, sans-serif';
+    cx.fillText('foto berikutnya', 160, 170);
+    return c;
+  }
+
+  let placeholderCache;
+  function getPlaceholder() {
+    if (!placeholderCache) placeholderCache = createPlaceholder();
+    return placeholderCache;
+  }
+
+  function updateLivePreview() {
+    if (!previewCanvas || !canvas) return;
+    const filled = capturedFrames.length;
+    const previewFrames = [];
+    for (let i = 0; i < TOTAL_SHOTS; i++) {
+      previewFrames.push(i < filled ? capturedFrames[i] : getPlaceholder());
+    }
+    const realCanvas = canvas;
+    const realCW = canvas.width;
+    const realCH = canvas.height;
+    canvas.width = 0;
+    canvas.height = 0;
+    buildStrip(previewFrames);
+    const bw = canvas.width;
+    const bh = canvas.height;
+    previewCanvas.width = bw;
+    previewCanvas.height = bh;
+    const pctx = previewCanvas.getContext('2d');
+    pctx.clearRect(0, 0, bw, bh);
+    pctx.drawImage(canvas, 0, 0);
+    canvas.width = realCW;
+    canvas.height = realCH;
+    const t = THEMES[currentTheme];
+    if (t) document.body.setAttribute('data-theme', currentTheme);
+  }
+
   // ═══════════════════════════════════════════════
   // COUNTDOWN
   // ═══════════════════════════════════════════════
@@ -588,6 +649,7 @@
     if (capturedFrames.length < TOTAL_SHOTS) {
       updateStep(capturedFrames.length + 1);
       showState('camera');
+      updateLivePreview();
     } else {
       updateStep(TOTAL_SHOTS);
       setTimeout(() => {
