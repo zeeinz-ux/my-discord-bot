@@ -1,6 +1,6 @@
 /**
- * Photobox — Photobooth Strip Camera
- * Pilih template (1-5 foto), ambil foto, gabung jadi strip, kirim via webhook.
+ * Photobox — Multi-theme Photobooth Strip
+ * Pilih tema & jumlah foto, ganti tema di tengah jalan, kirim via webhook.
  */
 (function () {
   'use strict';
@@ -26,9 +26,14 @@
   const stepLabel = $('pbStepLabel');
   const btnCaptureText = $('pbBtnCaptureText');
   const stepIndicator = $('pbStepIndicator');
-  const pickerCards = document.querySelectorAll('.pb-picker-card');
-  const btnStart = $('pbBtnStart');
+  const frameDeco = $('pbFrameDeco');
+  const frameLabel = $('pbFrameLabel');
+  const floaties = $('pbFloaties');
 
+  const pickerCards = document.querySelectorAll('.pb-picker-card');
+  const themeBtns = document.querySelectorAll('.pb-theme-btn');
+  const liveDots = document.querySelectorAll('.live-theme-dot');
+  const btnStart = $('pbBtnStart');
   const btnCapture = $('pbBtnCapture');
   const btnRetake = $('pbBtnRetake');
   const btnSend = $('pbBtnSend');
@@ -40,17 +45,146 @@
   let isProcessing = false;
   let currentStep = 1;
   let TOTAL_SHOTS = 3;
+  let currentTheme = 'pink-love';
 
-  // ── Step labels per template size ──
+  // ═══════════════════════════════════════════════
+  // THEMES
+  // ═══════════════════════════════════════════════
+  const THEMES = {
+    'pink-love': {
+      accent: '#ff6b9d',
+      secondary: '#c8a8e9',
+      stripBg: '#fff8fa',
+      border: '#f0e0e8',
+      text: '#ff6b9d',
+      textMuted: '#b0a0b0',
+      grad1: '#ff6b9d',
+      grad2: '#c8a8e9',
+      floaties: ['🌸', '⭐', '💖', '✨', '🫶', '🌟'],
+      deco: ['💖', '💖', '💖', '💖'],
+      decoPos: [
+        { top: '6px', left: '8px' },
+        { top: '6px', right: '8px' },
+        { bottom: '6px', left: '8px' },
+        { bottom: '6px', right: '8px' },
+      ],
+      label: '✨ cuek — cantik — gemas ✨',
+      betweenEmojis: ['💖', '✨', '⭐', '🫶', '🌸'],
+      brand: '💖  Synapse Photobox  💖',
+    },
+    'sky-blue': {
+      accent: '#4fc3f7',
+      secondary: '#a8d8e9',
+      stripBg: '#f0f8ff',
+      border: '#d0e8f5',
+      text: '#4fc3f7',
+      textMuted: '#8ab4d0',
+      grad1: '#4fc3f7',
+      grad2: '#a8d8e9',
+      floaties: ['☁️', '⭐', '🌸', '✨', '🌼', '🌟'],
+      deco: ['☁️', '⭐', '🌸', '✨'],
+      decoPos: [
+        { top: '4px', left: '6px' },
+        { top: '4px', right: '6px' },
+        { bottom: '4px', left: '6px' },
+        { bottom: '4px', right: '6px' },
+      ],
+      label: '✨ langit — bintang — bunga ✨',
+      betweenEmojis: ['⭐', '🌸', '✨', '🌼', '☁️'],
+      brand: '☁️  Synapse Photobox  ☁️',
+    },
+    'mint-night': {
+      accent: '#69db7c',
+      secondary: '#a8e9c8',
+      stripBg: '#f5fff7',
+      border: '#d0ead8',
+      text: '#69db7c',
+      textMuted: '#90b8a0',
+      grad1: '#69db7c',
+      grad2: '#a8e9c8',
+      floaties: ['🍃', '🌿', '🌸', '✨', '🌙', '🌟'],
+      deco: ['🍃', '🌙', '🌸', '✨'],
+      decoPos: [
+        { top: '4px', left: '6px' },
+        { top: '4px', right: '6px' },
+        { bottom: '4px', left: '6px' },
+        { bottom: '4px', right: '6px' },
+      ],
+      label: '✨ segar — santai — damai ✨',
+      betweenEmojis: ['🍃', '🌸', '✨', '🌙', '🌿'],
+      brand: '🌿  Synapse Photobox  🌿',
+    },
+  };
+
+  // ═══════════════════════════════════════════════
+  // THEME SWITCHING
+  // ═══════════════════════════════════════════════
+  function applyTheme(themeId) {
+    currentTheme = themeId;
+    const t = THEMES[themeId];
+
+    // Set data attribute on body (triggers CSS variables)
+    document.body.setAttribute('data-theme', themeId);
+
+    // Frame decorations
+    frameDeco.innerHTML = '';
+    t.deco.forEach((emoji, i) => {
+      const el = document.createElement('span');
+      el.className = 'frame-deco-item';
+      el.textContent = emoji;
+      el.style.top = t.decoPos[i].top;
+      el.style.left = t.decoPos[i].left;
+      el.style.right = t.decoPos[i].right || 'auto';
+      el.style.bottom = t.decoPos[i].bottom || 'auto';
+      el.style.animationDelay = (i * 0.3) + 's';
+      frameDeco.appendChild(el);
+    });
+
+    // Frame label
+    frameLabel.textContent = t.label;
+
+    // Floating decorations
+    floaties.innerHTML = '';
+    t.floaties.forEach((emoji, i) => {
+      const el = document.createElement('span');
+      el.className = 'floaty';
+      el.textContent = emoji;
+      const positions = [
+        { top: '8%', left: '5%' }, { top: '15%', right: '8%' },
+        { top: '40%', left: '3%' }, { bottom: '30%', right: '5%' },
+        { bottom: '15%', left: '10%' }, { top: '60%', right: '3%' },
+      ];
+      el.style.top = positions[i].top || 'auto';
+      el.style.left = positions[i].left || 'auto';
+      el.style.right = positions[i].right || 'auto';
+      el.style.bottom = positions[i].bottom || 'auto';
+      el.style.animationDelay = (i * 0.5) + 's';
+      floaties.appendChild(el);
+    });
+
+    // Update active states
+    themeBtns.forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.theme === themeId);
+    });
+    liveDots.forEach((dot) => {
+      dot.classList.toggle('active', dot.dataset.theme === themeId);
+    });
+  }
+
+  // ═══════════════════════════════════════════════
+  // STEP LABELS
+  // ═══════════════════════════════════════════════
   const STEP_LABELS = {
     1: ['Pose terbaik!'],
     2: ['Pose pertama!', 'Pose terakhir!'],
-    3: ['Pose pertama!', 'Pose kedua, keren!', 'Pose terakhir, gemas!'],
+    3: ['Pose pertama!', 'Pose kedua!', 'Pose terakhir!'],
     4: ['Pose #1!', 'Pose #2!', 'Pose #3!', 'Pose terakhir!'],
     5: ['Pose #1!', 'Pose #2!', 'Pose #3!', 'Pose #4!', 'Pose terakhir!'],
   };
 
-  // ── Webhook from URL ──
+  // ═══════════════════════════════════════════════
+  // WEBHOOK
+  // ═══════════════════════════════════════════════
   const params = new URLSearchParams(window.location.search);
   const webhookId = params.get('whid');
   const webhookToken = params.get('whtoken');
@@ -58,7 +192,9 @@
     ? `https://discord.com/api/webhooks/${webhookId}/${webhookToken}`
     : null;
 
-  // ── Utility ──
+  // ═══════════════════════════════════════════════
+  // UTILITY
+  // ═══════════════════════════════════════════════
   function showState(name) {
     Object.keys(states).forEach((key) => {
       states[key].classList.toggle('hidden', key !== name);
@@ -84,7 +220,9 @@
     return `${pad(d.getDate())} ${months[d.getMonth()]} ${d.getFullYear()}`;
   }
 
-  // ── Build step indicator dynamically ──
+  // ═══════════════════════════════════════════════
+  // STEP INDICATOR
+  // ═══════════════════════════════════════════════
   function buildStepIndicator(count) {
     stepIndicator.innerHTML = '';
     for (let i = 1; i <= count; i++) {
@@ -101,7 +239,6 @@
     }
   }
 
-  // ── Update step indicator ──
   function updateStep(step) {
     currentStep = step;
     const dots = stepIndicator.querySelectorAll('.step-dot');
@@ -125,14 +262,27 @@
     });
   });
 
+  themeBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      applyTheme(btn.dataset.theme);
+    });
+  });
+
   btnStart.addEventListener('click', () => {
-    const active = document.querySelector('.pb-picker-card.active');
-    if (!active) return;
-    TOTAL_SHOTS = parseInt(active.dataset.count);
+    const activeCard = document.querySelector('.pb-picker-card.active');
+    if (!activeCard) return;
+    TOTAL_SHOTS = parseInt(activeCard.dataset.count);
     capturedFrames = [];
     buildStepIndicator(TOTAL_SHOTS);
     updateStep(1);
     showState('camera');
+  });
+
+  // Live theme dots (camera page)
+  liveDots.forEach((dot) => {
+    dot.addEventListener('click', () => {
+      applyTheme(dot.dataset.theme);
+    });
   });
 
   // ═══════════════════════════════════════════════
@@ -153,6 +303,7 @@
       });
       video.srcObject = mediaStream;
       await video.play();
+      applyTheme('pink-love');
       showState('picker');
     } catch (err) {
       console.error('[PHOTOBOX] Camera error:', err);
@@ -191,9 +342,11 @@
   }
 
   // ═══════════════════════════════════════════════
-  // BUILD PHOTOBOOTH STRIP
+  // BUILD STRIP (theme-aware)
   // ═══════════════════════════════════════════════
   function buildStrip(frames) {
+    const t = THEMES[currentTheme];
+
     const photoW = 240;
     const photoH = 180;
     const gap = 12;
@@ -211,82 +364,77 @@
     canvas.height = stripH;
     const ctx = canvas.getContext('2d');
 
-    // ── White background ──
-    ctx.fillStyle = '#fff8fa';
+    // Background
+    ctx.fillStyle = t.stripBg;
     ctx.beginPath();
     roundRect(ctx, 0, 0, stripW, stripH, 12);
     ctx.fill();
 
-    // ── Subtle inner shadow border ──
+    // Subtle border
     ctx.shadowColor = 'rgba(0,0,0,0.08)';
     ctx.shadowBlur = 4;
-    ctx.strokeStyle = '#f0e0e8';
+    ctx.strokeStyle = t.border;
     ctx.lineWidth = 2;
     ctx.beginPath();
     roundRect(ctx, 2, 2, stripW - 4, stripH - 4, 11);
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    // ── Top decorative line ──
+    // Top decorative line
     const grad = ctx.createLinearGradient(0, 0, stripW, 0);
     grad.addColorStop(0, 'transparent');
-    grad.addColorStop(0.2, '#ff6b9d');
-    grad.addColorStop(0.5, '#c8a8e9');
-    grad.addColorStop(0.8, '#ff6b9d');
+    grad.addColorStop(0.2, t.grad1);
+    grad.addColorStop(0.5, t.grad2);
+    grad.addColorStop(0.8, t.grad1);
     grad.addColorStop(1, 'transparent');
     ctx.fillStyle = grad;
     ctx.fillRect(paddingX, paddingY - 2, photoW, 3);
 
-    // ── Header: Brand text ──
-    ctx.fillStyle = '#ff6b9d';
-    ctx.font = 'bold 15px Nunito, sans-serif';
+    // Header
+    ctx.fillStyle = t.grad1;
+    ctx.font = 'bold 14px Nunito, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('📸  Synapse Photobox  📸', stripW / 2, paddingY + headerH / 2);
+    ctx.fillText(t.brand, stripW / 2, paddingY + headerH / 2);
 
-    // ── Photos ──
+    // Photos
     let y = paddingY + headerH;
     for (let i = 0; i < totalPhotos; i++) {
       const x = paddingX;
 
       ctx.save();
-
       ctx.shadowColor = 'rgba(0,0,0,0.12)';
       ctx.shadowBlur = 6;
       ctx.shadowOffsetY = 2;
-
       ctx.beginPath();
       roundRect(ctx, x, y, photoW, photoH, cornerRadius);
       ctx.clip();
-
       ctx.drawImage(frames[i], 0, 0, frames[i].width, frames[i].height, x, y, photoW, photoH);
       ctx.restore();
 
-      ctx.strokeStyle = 'rgba(200, 168, 233, 0.2)';
+      ctx.strokeStyle = t.border;
       ctx.lineWidth = 1;
       ctx.beginPath();
       roundRect(ctx, x, y, photoW, photoH, cornerRadius);
       ctx.stroke();
 
-      // Cute decoration between photos
       if (i < totalPhotos - 1) {
         const decoY = y + photoH + gap / 2;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.font = '16px sans-serif';
-        const emojis = ['💖', '✨', '⭐', '🫶', '🌸'];
-        ctx.fillText(emojis[i % emojis.length], stripW / 2, decoY);
+        ctx.fillText(t.betweenEmojis[i % t.betweenEmojis.length], stripW / 2, decoY);
       }
 
       y += photoH + gap;
     }
 
-    // ── Divider line before footer ──
+    // Divider
     ctx.fillStyle = grad;
     ctx.fillRect(paddingX, y - gap + 6, photoW, 3);
 
-    // ── Footer: Date + template info ──
-    ctx.fillStyle = '#b0a0b0';
+    // Footer
+    ctx.fillStyle = t.textMuted;
     ctx.font = '12px Nunito, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -307,7 +455,7 @@
   }
 
   // ═══════════════════════════════════════════════
-  // COUNTDOWN + CAPTURE SEQUENCE
+  // COUNTDOWN
   // ═══════════════════════════════════════════════
   async function startCountdown() {
     if (isProcessing) return;
@@ -349,7 +497,7 @@
   }
 
   // ═══════════════════════════════════════════════
-  // SEND via Webhook
+  // SEND
   // ═══════════════════════════════════════════════
   async function sendPhoto() {
     showState('sending');
@@ -363,9 +511,7 @@
       payload.append('file', blob, `${timestamp()}.jpg`);
       payload.append(
         'payload_json',
-        JSON.stringify({
-          content: '📸 **Photobooth Strip — hasil jepretan!**',
-        })
+        JSON.stringify({ content: '📸 **Photobooth Strip — hasil jepretan!**' })
       );
 
       const resp = await fetch(WEBHOOK_URL, {
@@ -396,7 +542,7 @@
   }
 
   // ═══════════════════════════════════════════════
-  // EVENT BINDINGS
+  // EVENTS
   // ═══════════════════════════════════════════════
   btnCapture.addEventListener('click', startCountdown);
   btnRetake.addEventListener('click', () => {

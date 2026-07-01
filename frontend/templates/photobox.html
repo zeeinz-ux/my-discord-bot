@@ -7,19 +7,12 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/photobox.css') }}" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📸</text></svg>" />
 </head>
-<body>
+<body data-theme="pink-love">
 
   <div class="pb-container">
 
     <!-- Decorative floating elements -->
-    <div class="pb-floaties" aria-hidden="true">
-      <span class="floaty floaty--1">🌸</span>
-      <span class="floaty floaty--2">⭐</span>
-      <span class="floaty floaty--3">💖</span>
-      <span class="floaty floaty--4">✨</span>
-      <span class="floaty floaty--5">🫶</span>
-      <span class="floaty floaty--6">🌟</span>
-    </div>
+    <div class="pb-floaties" aria-hidden="true" id="pbFloaties"></div>
 
     <!-- Header -->
     <div class="pb-header">
@@ -39,53 +32,52 @@
 
       <!-- === STATE: Template Picker === -->
       <div class="pb-state hidden" id="pbStatePicker">
-        <p class="pb-picker-title">Pilih template photobooth ✨</p>
-        <p class="pb-picker-sub">berapa banyak foto yang mau diambil?</p>
+        <p class="pb-picker-title">Pilih tema &amp; template ✨</p>
+        <p class="pb-picker-sub">tentukan gaya dan jumlah fotonya!</p>
+
+        <!-- Theme Picker -->
+        <div class="pb-theme-row" id="pbThemeRow">
+          <button class="pb-theme-btn active" data-theme="pink-love">
+            <span class="theme-swatch swatch-pink"></span>
+            <span class="theme-label">Pink Love</span>
+          </button>
+          <button class="pb-theme-btn" data-theme="sky-blue">
+            <span class="theme-swatch swatch-blue"></span>
+            <span class="theme-label">Sky Blue</span>
+          </button>
+          <button class="pb-theme-btn" data-theme="mint-night">
+            <span class="theme-swatch swatch-mint"></span>
+            <span class="theme-label">Mint Night</span>
+          </button>
+        </div>
+
+        <!-- Count Picker -->
+        <p class="pb-picker-sub" style="margin-top: 0.3rem;">berapa banyak foto?</p>
         <div class="pb-picker-grid">
           <button class="pb-picker-card" data-count="1">
             <span class="picker-icon">📸</span>
-            <span class="picker-label">1 Foto</span>
-            <div class="picker-preview">
-              <span class="pp-block"></span>
-            </div>
+            <span class="picker-label">1</span>
+            <div class="picker-preview"><span class="pp-block"></span></div>
           </button>
           <button class="pb-picker-card" data-count="2">
             <span class="picker-icon">📸📸</span>
-            <span class="picker-label">2 Foto</span>
-            <div class="picker-preview">
-              <span class="pp-block"></span>
-              <span class="pp-block"></span>
-            </div>
+            <span class="picker-label">2</span>
+            <div class="picker-preview"><span class="pp-block"></span><span class="pp-block"></span></div>
           </button>
           <button class="pb-picker-card active" data-count="3">
             <span class="picker-icon">📸📸📸</span>
-            <span class="picker-label">3 Foto</span>
-            <div class="picker-preview">
-              <span class="pp-block"></span>
-              <span class="pp-block"></span>
-              <span class="pp-block"></span>
-            </div>
+            <span class="picker-label">3</span>
+            <div class="picker-preview"><span class="pp-block"></span><span class="pp-block"></span><span class="pp-block"></span></div>
           </button>
           <button class="pb-picker-card" data-count="4">
             <span class="picker-icon">📸📸📸📸</span>
-            <span class="picker-label">4 Foto</span>
-            <div class="picker-preview">
-              <span class="pp-block"></span>
-              <span class="pp-block"></span>
-              <span class="pp-block"></span>
-              <span class="pp-block"></span>
-            </div>
+            <span class="picker-label">4</span>
+            <div class="picker-preview"><span class="pp-block"></span><span class="pp-block"></span><span class="pp-block"></span><span class="pp-block"></span></div>
           </button>
           <button class="pb-picker-card" data-count="5">
             <span class="picker-icon">📸📸📸📸📸</span>
-            <span class="picker-label">5 Foto</span>
-            <div class="picker-preview">
-              <span class="pp-block"></span>
-              <span class="pp-block"></span>
-              <span class="pp-block"></span>
-              <span class="pp-block"></span>
-              <span class="pp-block"></span>
-            </div>
+            <span class="picker-label">5</span>
+            <div class="picker-preview"><span class="pp-block"></span><span class="pp-block"></span><span class="pp-block"></span><span class="pp-block"></span><span class="pp-block"></span></div>
           </button>
         </div>
         <button class="pb-btn pb-btn--start" id="pbBtnStart">
@@ -101,14 +93,23 @@
         <div class="pb-frame">
           <div class="pb-frame-inner">
             <video id="pbVideo" autoplay playsinline muted></video>
-            <div class="pb-frame-deco" aria-hidden="true">
-              <span class="deco-heart deco-heart--tl">💖</span>
-              <span class="deco-heart deco-heart--tr">💖</span>
-              <span class="deco-heart deco-heart--bl">💖</span>
-              <span class="deco-heart deco-heart--br">💖</span>
-            </div>
+            <div class="pb-frame-deco" id="pbFrameDeco" aria-hidden="true"></div>
           </div>
-          <div class="pb-frame-label">✨ cuek — cantik — gemas ✨</div>
+          <div class="pb-frame-label" id="pbFrameLabel">✨ cuek — cantik — gemas ✨</div>
+        </div>
+
+        <!-- Theme Switcher (on-the-fly) -->
+        <div class="pb-live-theme">
+          <span class="live-theme-label">Tema:</span>
+          <button class="live-theme-dot" data-theme="pink-love" title="Pink Love">
+            <span class="dot-swatch swatch-pink"></span>
+          </button>
+          <button class="live-theme-dot" data-theme="sky-blue" title="Sky Blue">
+            <span class="dot-swatch swatch-blue"></span>
+          </button>
+          <button class="live-theme-dot" data-theme="mint-night" title="Mint Night">
+            <span class="dot-swatch swatch-mint"></span>
+          </button>
         </div>
 
         <button class="pb-btn pb-btn--capture" id="pbBtnCapture">
