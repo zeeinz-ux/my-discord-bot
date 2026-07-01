@@ -518,7 +518,7 @@
     const cells = getLayout(count);
     const maxY = getLayoutMaxY(count);
 
-    const photoAreaW = 240;
+    const photoAreaW = currentLayoutStyle === 'collage' && count >= 3 ? 310 : 250;
     const margin = 10;
     const layoutH = photoAreaW * maxY;
     const headerH = 36;
@@ -626,7 +626,7 @@
     const filled = capturedFrames.length;
     const cells = getLayout(count);
     const maxY = getLayoutMaxY(count);
-    const maxW = 210;
+    const maxW = currentLayoutStyle === 'collage' && count >= 3 ? 280 : 250;
     const margin = 6;
 
     const layoutH = maxW * maxY;
