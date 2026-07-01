@@ -101,8 +101,8 @@ class AIChat(commands.Cog):
             return
       
         timeout = aiohttp.ClientTimeout(
-            total=60,
-            connect=15
+            total=25,
+            connect=10
         )
       
         self.session = aiohttp.ClientSession(
