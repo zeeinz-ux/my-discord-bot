@@ -1984,6 +1984,16 @@ def save_welcome_boost(guild_id: str):
         return jsonify({"success": False, "message": f"❌ Terjadi kesalahan server: {str(e)}"}), 500
 
 
+# ==========================================================
+# Photobox — Camera Frontend (no login needed)
+# ==========================================================
+@app.route("/photobox")
+def photobox():
+    """Serve the photobox camera page."""
+    return render_template("photobox.html",
+                           user=None, avatar_url="")
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)

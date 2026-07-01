@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>📸 Photobox — Synapse</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/photobox.css') }}" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>📸</text></svg>" />
+</head>
+<body>
+
+  <div class="pb-container">
+
+    <!-- Decorative floating elements -->
+    <div class="pb-floaties" aria-hidden="true">
+      <span class="floaty floaty--1">🌸</span>
+      <span class="floaty floaty--2">⭐</span>
+      <span class="floaty floaty--3">💖</span>
+      <span class="floaty floaty--4">✨</span>
+      <span class="floaty floaty--5">🫶</span>
+      <span class="floaty floaty--6">🌟</span>
+    </div>
+
+    <!-- Header -->
+    <div class="pb-header">
+      <h1 class="pb-title">📸 Photobox</h1>
+      <p class="pb-subtitle">senyum dulu, nanti kita liat hasilnya! ✨</p>
+    </div>
+
+    <!-- Main Card -->
+    <div class="pb-card" id="pbCard">
+
+      <!-- === STATE: Loading === -->
+      <div class="pb-state" id="pbStateLoading">
+        <div class="pb-loading-icon">📷</div>
+        <p class="pb-loading-text">Minta izin kamera dulu...</p>
+        <div class="pb-spinner"></div>
+      </div>
+
+      <!-- === STATE: Camera === -->
+      <div class="pb-state hidden" id="pbStateCamera">
+        <div class="pb-frame">
+          <div class="pb-frame-inner">
+            <video id="pbVideo" autoplay playsinline muted></video>
+            <div class="pb-frame-deco" aria-hidden="true">
+              <span class="deco-heart deco-heart--tl">💖</span>
+              <span class="deco-heart deco-heart--tr">💖</span>
+              <span class="deco-heart deco-heart--bl">💖</span>
+              <span class="deco-heart deco-heart--br">💖</span>
+            </div>
+          </div>
+          <div class="pb-frame-label">✨ cuek — cantik — gemas ✨</div>
+        </div>
+
+        <button class="pb-btn pb-btn--capture" id="pbBtnCapture">
+          <span class="btn-icon">📸</span>
+          Ambil Foto
+        </button>
+        <p class="pb-hint">Klik tombolnya, nanti ada countdown 3 detik!</p>
+      </div>
+
+      <!-- === STATE: Countdown === -->
+      <div class="pb-state hidden" id="pbStateCountdown">
+        <div class="pb-countdown" id="pbCountdownNum">3</div>
+        <p class="pb-countdown-label" id="pbCountdownLabel">siap-siap...</p>
+      </div>
+
+      <!-- === STATE: Preview === -->
+      <div class="pb-state hidden" id="pbStatePreview">
+        <div class="pb-result-frame">
+          <canvas id="pbCanvas"></canvas>
+          <div class="pb-result-sticker" aria-hidden="true">
+            <span class="sticker-1">🫶</span>
+            <span class="sticker-2">✨</span>
+            <span class="sticker-3">💖</span>
+          </div>
+        </div>
+        <div class="pb-result-actions">
+          <button class="pb-btn pb-btn--retake" id="pbBtnRetake">
+            🔄 Ulang
+          </button>
+          <button class="pb-btn pb-btn--send" id="pbBtnSend">
+            📤 Kirim ke Discord
+          </button>
+        </div>
+      </div>
+
+      <!-- === STATE: Sending === -->
+      <div class="pb-state hidden" id="pbStateSending">
+        <div class="pb-sending-icon">📤</div>
+        <p class="pb-sending-text">Ngirim foto ke Discord...</p>
+        <div class="pb-sending-bar"><div class="pb-sending-fill"></div></div>
+      </div>
+
+      <!-- === STATE: Success === -->
+      <div class="pb-state hidden" id="pbStateSuccess">
+        <div class="pb-success-icon">🎉</div>
+        <h2 class="pb-success-title">Berhasil! 🔥</h2>
+        <p class="pb-success-text">Foto lu udah muncul di channel Discord!</p>
+        <p class="pb-success-sub">cakep bener dah 😎</p>
+        <div class="pb-confetti" aria-hidden="true">
+          <span>🎊</span><span>✨</span><span>🎉</span><span>💖</span>
+          <span>🌟</span><span>🎊</span><span>✨</span><span>💖</span>
+          <span>🎉</span><span>🌟</span><span>🎊</span><span>✨</span>
+        </div>
+      </div>
+
+      <!-- === STATE: Error === -->
+      <div class="pb-state hidden" id="pbStateError">
+        <div class="pb-error-icon">😿</div>
+        <h2 class="pb-error-title">Waduh, error!</h2>
+        <p class="pb-error-text" id="pbErrorText">Coba refresh halaman dan ulangi lagi.</p>
+        <button class="pb-btn pb-btn--retry" id="pbBtnRetry">🔄 Coba Lagi</button>
+      </div>
+
+    </div>
+
+    <!-- Footer -->
+    <p class="pb-footer">💝 Synapse Photobox — made with love for your server 💝</p>
+
+  </div>
+
+  <script src="{{ url_for('static', filename='js/photobox.js') }}"></script>
+</body>
+</html>
