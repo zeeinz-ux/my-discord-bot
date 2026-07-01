@@ -1,1 +1,1 @@
-# constants.py — Lavalink removed, using yt-dlp + FFmpeg directly
+# constants.py — Bot constants

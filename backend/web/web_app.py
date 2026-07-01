@@ -21,15 +21,13 @@ from PIL import Image
 # ==========================================================
 # Import relative dari dalam backend/ folder
 # ==========================================================
-from backend.utils.formatters import format_duration, format_uptime
+from backend.utils.formatters import format_uptime
 from firebase_admin import firestore
 from backend.cogs.database.firebase_setup import db
 from backend.utils.firestore_stats import (
     get_stats_snapshot,
     set_guild_channels,
     get_guild_channels,
-    set_music_state,
-    get_music_state,
     set_bot_instance,
     get_bot_instance,
     get_firestore_diagnostics,
@@ -150,162 +148,7 @@ def logout():
     return redirect("/")
 
 
-# ==========================================================
-# Spotify OAuth callback — one-time token generator
-# ==========================================================
 
-SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
-SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
-SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI") or "https://my-discord-bot-my-discord-bot.up.railway.app/spotify-callback"
-
-@app.route("/spotify-callback")
-def spotify_callback():
-    code = request.args.get("code")
-    error = request.args.get("error")
-    if error:
-        return f"<h1>Authorization failed</h1><p>Error: {error}</p>", 400
-    if not code:
-        return "<h1>No authorization code received</h1>", 400
-
-    data = {
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": SPOTIFY_REDIRECT_URI,
-        "client_id": SPOTIFY_CLIENT_ID,
-        "client_secret": SPOTIFY_CLIENT_SECRET,
-    }
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    try:
-        resp = requests.post("https://accounts.spotify.com/api/token", data=data, headers=headers, timeout=10)
-        if resp.status_code != 200:
-            return f"<h1>Token exchange failed</h1><p>HTTP {resp.status_code}: {resp.text}</p>", 400
-        token_data = resp.json()
-    except Exception as e:
-        return f"<h1>Token exchange error</h1><p>{e}</p>", 500
-
-    refresh_token = token_data.get("refresh_token", "NOT RETURNED")
-    access_token = token_data.get("access_token", "")
-    scopes = token_data.get("scope", "")
-
-    html = f"""
-    <!DOCTYPE html>
-    <html><head><meta charset="utf-8"><title>Spotify Token</title>
-    <style>body{{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 20px}}
-    code{{background:#eee;padding:8px 12px;border-radius:4px;display:block;word-break:break-all;font-size:14px}}
-    .success{{color:#1DB954;font-size:24px;font-weight:bold}}</style></head>
-    <body>
-    <h1 class="success">Authorization successful!</h1>
-    <p>Add this to your <code>.env</code> or Railway secrets:</p>
-    <code>SPOTIFY_USER_REFRESH_TOKEN={refresh_token}</code>
-    <p style="margin-top:24px">Scopes granted: <code>{scopes}</code></p>
-    {"<p><small>Access token: " + access_token[:20] + "... (auto-refreshes, not needed)</small></p>" if access_token else ""}
-    <p><small>You can close this tab.</small></p>
-    </body></html>
-    """
-    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
-
-
-# ==========================================================
-# API — Music
-# ==========================================================
-
-@app.route("/api/music/status")
-def api_music_status():
-    guild_id = request.args.get("guild_id")
-
-    if not guild_id:
-        return jsonify({"connected": False}), 400
-
-    state = _read_music_state_fast(guild_id)
-    if state is None:
-        state = get_music_state(guild_id)
-    return jsonify(state)
-
-
-MUSIC_STATE_DIR = "/tmp/discord_music_state"
-
-def _read_music_state_fast(guild_id: str) -> dict | None:
-    try:
-        path = os.path.join(MUSIC_STATE_DIR, f"{guild_id}.json")
-        if os.path.isfile(path):
-            with open(path) as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return None
-
-
-@app.route("/api/music/channels")
-def api_music_channels():
-    guild_id = request.args.get("guild_id")
-
-    if not guild_id:
-        return jsonify({"channels": []}), 400
-
-    return jsonify({
-        "channels": get_guild_channels(guild_id)
-    })
-
-
-@app.route("/api/music/queue", methods=["GET"])
-def api_music_queue():
-    guild_id = request.args.get("guild_id")
-
-    if not guild_id:
-        return jsonify({
-            "success": False,
-            "message": "guild_id required"
-        }), 400
-
-    state = get_music_state(guild_id)
-
-    return jsonify({
-        "success": True,
-        "queue": state.get("queue", []),
-        "queue_count": state.get("queue_count", 0),
-        "queue_duration": state.get("queue_duration", 0)
-    })
-
-
-@app.route("/api/music/queue", methods=["POST"])
-def api_music_queue_action():
-    data = request.get_json() or {}
-
-    return jsonify({
-        "success": True,
-        "message": f"Action {data.get('action')} received"
-    })
-
-
-CONTROL_QUEUE_DIR = "/tmp/discord_control_queue"
-
-def _ensure_queue_dir():
-    os.makedirs(CONTROL_QUEUE_DIR, exist_ok=True)
-
-@app.route("/api/music/control", methods=["POST"])
-def api_music_control():
-    try:
-        data = request.get_json() or {}
-        guild_id = data.get("guild_id")
-        action = data.get("action")
-
-        if not guild_id:
-            return jsonify({"success": False, "message": "guild_id required"}), 400
-        if not action:
-            return jsonify({"success": False, "message": "action required"}), 400
-
-        _ensure_queue_dir()
-        cmd_id = f"{int(time.time())}_{os.urandom(4).hex()}"
-        cmd_file = os.path.join(CONTROL_QUEUE_DIR, f"{cmd_id}.json")
-
-        with open(cmd_file, "w") as f:
-            json.dump({"guild_id": guild_id, "action": action, "data": data, "id": cmd_id}, f)
-
-        return jsonify({"success": True, "action": action, "queued": True})
-
-    except Exception as e:
-        print(f"[CONTROL ERROR] {e}")
-        return jsonify({"success": False, "message": str(e)}), 500
 
 
 # ==========================================================
@@ -815,26 +658,6 @@ def api_settings_reset(guild_id: str):
 @login_required
 def settings_page(guild_id: str):
     return _render_page("settings.html", active_page="settings", guild_id=guild_id)
-
-# ==========================================================
-# ROUTES — Music (placeholder)
-# ==========================================================
-
-@app.route("/dashboard/<guild_id>/music/now-playing")
-@login_required
-def music_now_playing(guild_id: str):
-    return _render_page("now_playing.html", active_page="now_playing", guild_id=guild_id)
-
-
-@app.route("/dashboard/<guild_id>/music/queue")
-@login_required
-def music_queue(guild_id: str):
-    return _render_page("queue.html", active_page="queue", guild_id=guild_id)
-
-@app.route("/dashboard/<guild_id>/music/playlists")
-@login_required
-def music_playlists(guild_id: str):
-    return _render_page("playlist.html", active_page="playlists", guild_id=guild_id)
 
 # ==========================================================
 # ROUTES — Welcome / Announcements

@@ -59,7 +59,6 @@ class GeneralCog(commands.Cog):
         )
 
         cog_emoji = {
-            "Music": "🎵",
             "GeneralCog": "🌐",
             "Leveling": "⭐",
             "Boost": "🚀",

@@ -9,12 +9,6 @@ serviceAccountKey.json
 # Browser cookies (YouTube auth — sensitive!)
 cookies/
 
-# Reference project (Beatra/MusicBot — not ours)
-MusicBot/
-
-# Lavalink
-backend/lavalink/logs/
-lavalink/logs/
 *.log
 
 # Python
@@ -55,22 +49,10 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Music downloads
-*.mp3
-*.m4a
-*.webm
-*.part
-
 # Replit specific
 .replit
 replit.nix
 .breakpoints
-
-# Lavalink config
-application.yml
-
-# Lavalink JAR (opsional, kalau mau clone manual download)
-# lavalink/Lavalink.jar
 
 # Database local
 *.db
@@ -88,6 +70,9 @@ backup/
 # Flask session storage
 backend/flask_session/
 flask_session/
+
+# Music backup
+music_backup/
 
 # Archives
 *.zip

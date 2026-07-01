@@ -1,17 +1,15 @@
 # Hidden Hamlet — Discord Bot v4.7
 
-A multifunctional Discord bot with a web dashboard, AI chat, music player, moderation, leveling, and server management tools.
+A multifunctional Discord bot with a web dashboard, AI chat, moderation, leveling, and server management tools.
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
 | Runtime | Python 3.11 |
-| Bot Library | discord.py 2.7.1 (with voice) |
+| Bot Library | discord.py 2.7.1 |
 | Web Server | Flask 3.1.3 + Gunicorn |
 | Database | Firebase Firestore (free tier) |
-| Music | yt-dlp 2026.6+ + FFmpeg (direct stream extraction, no Lavalink) |
-| YouTube auth | bgutil-ytdlp-pot-provider + Deno JS runtime (PO token generation) |
 | AI Chat | Google Gemini → Groq (Llama 3.3) → OpenRouter (fallback chain) |
 | Sessions | Flask-Session (server-side file) |
 | Deployment | Docker → Railway + UptimeRobot |
@@ -22,7 +20,6 @@ A multifunctional Discord bot with a web dashboard, AI chat, music player, moder
 
 | Cog | Description |
 |-----|-------------|
-| **Music** | YouTube/Spotify/SoundCloud playback via yt-dlp + FFmpeg. Spotify URL resolver with triple fallback (SpotifyDown → oEmbed → page scrape → yt-dlp extractor). Local audio cache. PO token auto-generation to bypass YouTube bot detection. Triple-API YouTube search (yt-dlp → YouTube Data API v3 → web scrape). |
 | **AI Chat** | Triple API fallback (Gemini → Groq → OpenRouter), personality, temperature, channel restriction, circuit breaker, personalized mentions. |
 | **Welcome** | Dual-style embed/banner auto-welcome with drag-drop image upload (Firestore base64). |
 | **Leave** | Auto-leave announcement (embed/banner). |
@@ -35,24 +32,12 @@ A multifunctional Discord bot with a web dashboard, AI chat, music player, moder
 | **Auto-Responder** | Keyword-triggered replies with regex, cooldown, channel filters. |
 | **General** | Ping, stats, help commands. |
 
-### Music Player Highlights
-
-- **Play URL or search query** — YouTube, Spotify (track/playlist/album/artist), SoundCloud
-- **Spotify playlist resolution** — extracts metadata via SpotifyDown API → falls back to oEmbed → page JSON scrape → yt-dlp extractor
-- **Background playlist loading** — first track plays immediately, rest resolve in background
-- **Local audio cache** — `/tmp/discord_audio_cache/` (ephemeral on Railway)
-- **Session owner** — first `/play` caller controls the session until `/stop`
-- **Auto-advance** — `_on_track_end_wrapper` chains to next track in queue
-- **Voice connection recovery** — auto-reconnect on disconnect, resume from state file
-- **Watchdog** — trip on stuck playback (configurable timeout)
-- **Sequential pre-load** — pre-download next 3 tracks for seamless transition
-
 ### Web Dashboard
 
 | Page | Description |
 |------|-------------|
 | `/` | Landing page with bot stats, sakura petals animation |
-| `/dashboard/<guild>/` | Server overview — real-time stats, music player status |
+| `/dashboard/<guild>/` | Server overview — real-time stats |
 | `/dashboard/<guild>/welcome` | Welcome settings with live preview |
 | `/dashboard/<guild>/welcome/leave` | Leave announcement config |
 | `/dashboard/<guild>/welcome/ban` | Ban announcement config |
@@ -85,11 +70,6 @@ discord-bot/
 │   │   ├── leave_settings/    # Leave announcement
 │   │   ├── leveling/          # XP/Leveling system
 │   │   ├── moderation/        # Spam detection
-│   │   ├── music/             # Music player (yt-dlp + FFmpeg)
-│   │   │   ├── music.py       # Music cog (slash commands)
-│   │   │   ├── ytdlp_source.py # yt-dlp wrapper, MusicController, queue
-│   │   │   ├── spotify_down.py # Spotify resolver (SpotifyDown → oEmbed → scrape)
-│   │   │   └── queue_manager.py
 │   │   └── welcome/           # Welcome cog (embed/banner)
 │   ├── utils/                 # Shared helpers (formatters, constants)
 │   ├── web/                   # Flask routes (web_app.py)
@@ -101,8 +81,7 @@ discord-bot/
 │       └── js/                # Page-specific logic
 ├── cookies/                   # YouTube cookies (Netscape format, optional)
 ├── flask_session/             # Flask-Session file storage (gitignored)
-├── scripts/                   # Helper scripts (e.g. Spotify OAuth2 token)
-├── Dockerfile                 # Production image (FFmpeg + bgutil-pot + Deno)
+├── Dockerfile                 # Production image
 ├── Procfile                   # honcho: web (gunicorn) + worker (bot)
 └── railway.json               # Railway deploy config
 ```
@@ -115,9 +94,6 @@ discord-bot/
 # Install deps
 pip install -r requirements.txt
 
-# FFmpeg must be installed and on PATH
-ffmpeg -version
-
 # Run bot + web dashboard
 honcho start -f Procfile
 # or
@@ -126,12 +102,11 @@ python backend/main.py
 
 ### Production (Railway)
 
-- **Build:** `Dockerfile` (Python 3.11-slim + FFmpeg + bgutil-pot + Deno)
+- **Build:** `Dockerfile` (Python 3.11-slim)
 - **Start:** `honcho start -f Procfile`
   - `web`: gunicorn `--bind 0.0.0.0:$PORT --workers 2 --timeout 120 backend.web.web_app:app`
   - `worker`: `python backend/main.py`
 - **24/7:** UptimeRobot pings every 5 min to prevent sleep
-- **YouTube auth:** `bgutil-ytdlp-pot-provider` runs on localhost to auto-generate PO tokens, bypassing YouTube bot detection
 
 ### Module path
 
@@ -145,11 +120,6 @@ See `backend/.env.example` for the full list. Key variables:
 - `FLASK_SECRET_KEY`
 - `FIREBASE_KEY` (path to service account JSON, or full JSON in single line)
 - `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY` (at least one for AI Chat)
-- `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` (optional, for Spotify features)
-- `SPOTIFY_USER_REFRESH_TOKEN` (optional, bypasses Spotify API sandbox 403s)
-- `YOUTUBE_API_KEY` (optional, fallback search when yt-dlp fails)
-- `YOUTUBE_COOKIES_TXT` (optional, paste Netscape cookies as env var)
-- `YTDLP_PROXY` (optional, override default direct connection)
 
 ## License
 

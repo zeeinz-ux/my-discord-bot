@@ -80,31 +80,6 @@
           </div>
         </div>
 
-        <!-- Music -->
-        <div class="nav-section" data-section="Music">
-          <div class="section-header">
-            <span class="section-title">🎵 Music</span>
-            <svg class="chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </div>
-          <div class="section-items">
-            <a href="/dashboard/{{ guild_id }}/music/now-playing" class="nav-item {% if active_page == 'now_playing' %}active{% endif %}" data-search="music player lagu now playing">
-              <span class="nav-icon">🎧</span>
-              <span class="nav-label">Now Playing</span>
-              {% if s.players %}<span class="nav-badge">{{ s.players|length }}</span>{% endif %}
-            </a>
-            <a href="/dashboard/{{ guild_id }}/music/queue" class="nav-item {% if active_page == 'queue' %}active{% endif %}" data-search="queue antrian">
-              <span class="nav-icon">📋</span>
-              <span class="nav-label">Queue</span>
-            </a>
-            <a href="/dashboard/{{ guild_id }}/music/playlists" class="nav-item {% if active_page == 'playlists' %}active{% endif %}" data-search="playlist daftar lagu">
-              <span class="nav-icon">📁</span>
-              <span class="nav-label">Playlists</span>
-            </a>
-          </div>
-        </div>
-
         <!-- Announcements -->
         <div class="nav-section" data-section="Announcements">
           <div class="section-header">

@@ -12,7 +12,7 @@
 #      errors and disables all writes for CIRCUIT_OPEN_SECONDS. Writes that
 #      arrive while the breaker is open are dropped (NOT queued — that's how
 #      we got banned in the first place).
-#   5. Public API surface is preserved: set_stats / set_music_state /
+#   5. Public API surface is preserved: set_stats /
 #      set_guild_channels / get_* functions keep the same signatures so
 #      main.py and web_app.py need no changes.
 # ============================================================================
@@ -35,7 +35,7 @@ try:
 except Exception:
     pass
 
-from backend.utils.formatters import format_duration, format_uptime
+from backend.utils.formatters import format_uptime
 
 try:
     from backend.cogs.database.firebase_setup import get_db
@@ -83,9 +83,6 @@ _local_stats: Dict[str, Any] = {
     "uptime": 0,
     "guilds": 0,
     "members": 0,
-    "lavalink_connected": False,
-    "lavalink_node": "N/A",
-    "players": [],
     "last_updated": "-",
     "guilds_list": [],
 }
@@ -93,12 +90,10 @@ _local_stats: Dict[str, Any] = {
 _stats_lock           = threading.Lock()
 _guild_channels_lock  = threading.Lock()
 _guild_roles_lock     = threading.Lock()
-_music_states_lock    = threading.Lock()
 _bot_instance_lock    = threading.Lock()
 
 _local_guild_channels: Dict[str, list] = {}
 _local_guild_roles:    Dict[str, list] = {}
-_local_music_states:   Dict[str, dict] = {}
 _bot_instance:         Optional[Any] = None
 
 
@@ -125,7 +120,6 @@ _pending: Dict[str, _PendingWrite] = {
     DOC_ID:             _PendingWrite(DOC_ID),
     "guild_channels":   _PendingWrite("guild_channels"),
     "guild_roles":      _PendingWrite("guild_roles"),
-    "music_states":     _PendingWrite("music_states"),
 }
 
 
@@ -339,7 +333,7 @@ def _read_from_firestore() -> Optional[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 def delete_guild_from_map(doc_id: str, guild_id: str) -> None:
     """Remove a specific guild_id key from a map-based document in bot_status.
-    Used for guild_channels, music_states, etc. when bot leaves a guild."""
+    Used for guild_channels, guild_roles, etc. when bot leaves a guild."""
     async def _delete():
         db = _get_db()
         if not db:
@@ -386,40 +380,11 @@ def set_guild_channels(guild_id: str, channels: list):
     _fire_and_forget(_schedule_write("guild_channels", full_snapshot))
 
 
-def set_music_state(guild_id: str, state: dict):
-    with _music_states_lock:
-        _local_music_states[guild_id] = state
-
-    # Batched write — collect across all guilds in one document.
-    with _music_states_lock:
-        full_snapshot = {gid: st for gid, st in _local_music_states.items()}
-
-    _fire_and_forget(_schedule_write("music_states", full_snapshot))
-
-
 def get_stats_snapshot() -> Dict[str, Any]:
     firestore_data = _read_from_firestore()
 
     with _stats_lock:
         raw = firestore_data if firestore_data else dict(_local_stats)
-
-    players = []
-    for p in raw.get("players", []):
-        dur = p.get("duration", 0)
-        pos = p.get("position", 0)
-        pct = (pos / dur * 100) if dur else 0
-        players.append({
-            "guild":            p.get("guild", "Unknown"),
-            "track":            p.get("track", "Unknown"),
-            "author":           p.get("author", "Unknown"),
-            "artwork":          p.get("artwork", "") or "https://via.placeholder.com/80?text=No+Art",
-            "queue":            p.get("queue", 0),
-            "listeners":        p.get("listeners", 0),
-            "paused":           p.get("paused", False),
-            "progress_percent": round(pct, 1),
-            "position_fmt":     format_duration(pos),
-            "duration_fmt":     format_duration(dur),
-        })
 
     return {
         "online":             raw.get("online", False),
@@ -427,9 +392,6 @@ def get_stats_snapshot() -> Dict[str, Any]:
         "uptime_fmt":         format_uptime(raw.get("uptime", 0)),
         "guilds":             raw.get("guilds", 0),
         "members":            raw.get("members", 0),
-        "lavalink_connected": raw.get("lavalink_connected", False),
-        "lavalink_node":      raw.get("lavalink_node", "N/A"),
-        "players":            players,
         "last_updated":       raw.get("last_updated", "-"),
         "guilds_list":        raw.get("guilds_list", [])
     }
@@ -472,19 +434,7 @@ def get_guild_roles(guild_id: str) -> list:
         return _local_guild_roles.get(guild_id, [])
 
 
-def get_music_state(guild_id: str) -> dict:
-    db = _get_db()
-    if db:
-        try:
-            doc = db.collection(COLLECTION).document("music_states").get()
-            if doc.exists:
-                data = doc.to_dict()
-                return data.get(guild_id, {"connected": False})
-        except Exception:
-            pass
 
-    with _music_states_lock:
-        return _local_music_states.get(guild_id, {"connected": False})
 
 
 def set_bot_instance(bot):
@@ -660,7 +610,6 @@ async def integrity_sweep(bot) -> None:
             await delete_guild_settings(guild_id)
             # Also clean up bot_status maps
             delete_guild_from_map("guild_channels", guild_id)
-            delete_guild_from_map("music_states", guild_id)
 
         print(f"[FIRESTORE CLEANUP] ✅ Integrity sweep complete — removed {len(orphaned)} orphaned guild(s)")
 

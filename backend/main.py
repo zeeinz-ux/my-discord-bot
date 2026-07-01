@@ -1,10 +1,7 @@
 import sys
 import os
-import json
+import time
 import warnings
-import subprocess
-import atexit
-import shutil
 import asyncio  # [PHASE 6a fix] required by _memory_monitor's asyncio.sleep + create_task
 
 os.environ["PYTHONUNBUFFERED"] = "1"
@@ -21,7 +18,6 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import time
-import threading
 from dotenv import load_dotenv
 
 import importlib
@@ -44,76 +40,6 @@ if _cookies_raw:
 # ===================================================
 
 # ===== RUST POT PROVIDER — bypass YouTube bot detection =====
-import urllib.request
-import urllib.error
-
-_pot_server_proc: subprocess.Popen | None = None
-
-def _start_pot_server():
-    global _pot_server_proc
-    pot_bin = shutil.which("bgutil-pot")
-    if not pot_bin:
-        print("[POT] bgutil-pot binary not found — YouTube bot detection may fail")
-        return
-    try:
-        _pot_server_proc = subprocess.Popen(
-            [pot_bin, "server", "--host", "127.0.0.1", "--port", "4416"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        # Tunggu sampai server siap (max 10 detik)
-        import time
-        for _ in range(50):
-            try:
-                urllib.request.urlopen("http://127.0.0.1:4416/ping", timeout=1)
-                print(f"[POT] ✅ Server started (PID {_pot_server_proc.pid}) — YouTube PO tokens active")
-                return
-            except urllib.error.URLError:
-                time.sleep(0.2)
-        print(f"[POT] ⚠️ Server started (PID {_pot_server_proc.pid}) but ping timeout — continuing anyway")
-    except Exception as e:
-        print(f"[POT] ❌ Failed to start: {e}")
-
-def _stop_pot_server():
-    global _pot_server_proc
-    if _pot_server_proc and _pot_server_proc.poll() is None:
-        _pot_server_proc.terminate()
-        try:
-            _pot_server_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            _pot_server_proc.kill()
-        print("[POT] Server stopped")
-
-atexit.register(_stop_pot_server)
-_start_pot_server()
-
-def _fetch_po_token():
-    if os.getenv("YOUTUBE_PO_TOKEN"):
-        print(f"[POT TOKEN] ✅ Using manual YOUTUBE_PO_TOKEN from env")
-        return
-    payload = json.dumps({"content_binding": ""}).encode()
-    for i in range(5):
-        try:
-            req = urllib.request.Request(
-                "http://127.0.0.1:4416/get_pot",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode())
-                token = data.get("poToken", "")
-                if token:
-                    os.environ["YOUTUBE_PO_TOKEN"] = token
-                    print(f"[POT TOKEN] ✅ Auto-fetched PO token ({len(token)} chars)")
-                    return
-        except Exception as e:
-            print(f"[POT TOKEN] ⚠️ Attempt {i+1}/5 failed: {e}")
-            if i < 4:
-                time.sleep(1)
-    print("[POT TOKEN] ❌ Failed to fetch PO token after 5 attempts")
-
-_fetch_po_token()
 # ============================================================
 
 # ===== INIT FIREBASE SEBELUM LOAD COGS =====
@@ -121,13 +47,13 @@ from backend.cogs.database import firebase_setup
 # ============================================
 
 # ===== [DASHBOARD] Import Firestore stats bridge =====
-from backend.utils.firestore_stats import set_stats, set_guild_channels, set_guild_roles, set_music_state, set_bot_instance, flush_now, delete_guild_from_map, delete_guild_settings, create_guild_settings_minimal, integrity_sweep, invalidate_stats_cache
+from backend.utils.firestore_stats import set_stats, set_guild_channels, set_guild_roles, set_bot_instance, flush_now, delete_guild_from_map, delete_guild_settings, create_guild_settings_minimal, integrity_sweep, invalidate_stats_cache
 # ==================================================
 
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
-intents.voice_states = True
+
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
@@ -149,7 +75,7 @@ async def setup_hook():
             if not filename.endswith(".py") or filename == "__init__.py":
                 continue
 
-            if filename in ["firebase_setup.py", "spotify_down.py"]:
+            if filename in ["firebase_setup.py"]:
                 continue
 
             rel_path = os.path.relpath(
@@ -175,7 +101,6 @@ async def setup_hook():
                 traceback.print_exc()
 
     print(f"[COG] ✅ Total {cog_count} cogs loaded!", flush=True)
-    print("[STATUS] 🎵 Music: yt-dlp + FFmpeg mode (no Lavalink)", flush=True)
 
 bot.setup_hook = setup_hook
 # ===========================================================================
@@ -210,21 +135,6 @@ async def _memory_monitor():
         except Exception as e:
             print(f"[MEMORY] Monitor error: {e}", flush=True)
 
-@tasks.loop(seconds=20.0)
-async def sync_music_to_dashboard():
-    guilds_list = [
-        {"id": str(g.id), "name": g.name, "member_count": g.member_count or 0}
-        for g in bot.guilds
-    ]
-    stats = {
-        "online": True,
-        "guilds": len(bot.guilds),
-        "members": sum(g.member_count for g in bot.guilds),
-        "lavalink_connected": False,
-        "guilds_list": guilds_list,
-    }
-    set_stats(stats)
-
 @bot.event
 async def on_guild_remove(guild):
     """Immediate stats update + full data cleanup when bot leaves a guild."""
@@ -239,7 +149,6 @@ async def on_guild_remove(guild):
         "online": True,
         "guilds": len(bot.guilds),
         "members": sum(g.member_count for g in bot.guilds),
-        "lavalink_connected": False,
         "guilds_list": guilds_list,
     }
     set_stats(stats)
@@ -248,7 +157,6 @@ async def on_guild_remove(guild):
     invalidate_stats_cache()
 
     delete_guild_from_map("guild_channels", guild_id)
-    delete_guild_from_map("music_states", guild_id)
 
     await delete_guild_settings(guild_id)
 
@@ -266,7 +174,6 @@ async def on_guild_join(guild):
         "online": True,
         "guilds": len(bot.guilds),
         "members": sum(g.member_count for g in bot.guilds),
-        "lavalink_connected": False,
         "guilds_list": guilds_list,
     }
     set_stats(stats)
@@ -288,38 +195,10 @@ start_time = time.time()
 
 
 # ===== [DASHBOARD] Stats updater loop =====
-@tasks.loop(seconds=5)
+@tasks.loop(seconds=30)
 async def update_stats():
     try:
-        cog = bot.get_cog("Music")
-        players = []
-        if cog:
-            for guild_id, controller in cog.controllers.items():
-                if controller.current_track and controller.vc:
-                    ch = controller.vc.channel
-                    listeners = 0
-                    if ch:
-                        listeners = len([m for m in ch.members if not m.bot])
-                    players.append({
-                        "guild": controller.guild.name if controller.guild else "Unknown",
-                        "track": controller.current_track.title,
-                        "author": controller.current_track.author or "Unknown",
-                        "duration": controller.current_track.duration or 0,
-                        "position": controller.position,
-                        "queue": len(controller.queue),
-                        "listeners": listeners,
-                        "paused": controller.paused,
-                        "artwork": controller.current_track.artwork or ""
-                    })
-
         for guild in bot.guilds:
-            voice_channels = [
-                {"id": str(ch.id), "name": ch.name}
-                for ch in guild.voice_channels
-                if ch.permissions_for(guild.me).connect
-            ]
-            set_guild_channels(str(guild.id), voice_channels)
-
             text_channels = [
                 {"id": str(ch.id), "name": ch.name}
                 for ch in guild.text_channels
@@ -341,58 +220,8 @@ async def update_stats():
             uptime=int(time.time() - start_time),
             guilds=len(bot.guilds),
             members=sum(g.member_count or 0 for g in bot.guilds),
-            lavalink_connected=False,
-            lavalink_node="N/A",
-            players=players,
             guilds_list=guilds_list
         )
-
-        if cog:
-            for guild_id, controller in cog.controllers.items():
-                guild_id_str = str(guild_id)
-                if controller.current_track and controller.vc:
-                    ch = controller.vc.channel
-                    listeners = 0
-                    if ch:
-                        listeners = len([m for m in ch.members if not m.bot])
-
-                    queue_list = []
-                    queue_total_ms = 0
-                    for t in list(controller.queue):
-                        queue_list.append({
-                            "title": t.title,
-                            "author": t.author or "Unknown",
-                            "duration": (t.duration or 0) // 1000,
-                            "thumbnail": t.artwork or "",
-                            "uri": t.uri or ""
-                        })
-                        queue_total_ms += (t.duration or 0)
-
-                    music_data = {
-                        "connected": True,
-                        "playing": not controller.paused,
-                        "paused": controller.paused,
-                        "channel_name": ch.name if ch else "Unknown",
-                        "channel_id": str(ch.id) if ch else None,
-                        "position": controller.position // 1000,
-                        "track": {
-                            "title": controller.current_track.title,
-                            "artist": controller.current_track.author or "Unknown",
-                            "duration": (controller.current_track.duration or 0) // 1000,
-                            "thumbnail": controller.current_track.artwork or "",
-                            "uri": controller.current_track.uri or ""
-                        },
-                        "queue": queue_list,
-                        "queue_count": len(queue_list),
-                        "queue_duration": queue_total_ms // 1000,
-                        "listeners": listeners,
-                    }
-                    set_music_state(guild_id_str, music_data)
-                    _write_music_state_fast(guild_id_str, music_data)
-                else:
-                    set_music_state(guild_id_str, {"connected": False})
-                    _write_music_state_fast(guild_id_str, {"connected": False})
-
     except Exception as e:
         print(f"[DASHBOARD STATS ERROR] {e}")
 
@@ -400,157 +229,6 @@ async def update_stats():
 @update_stats.before_loop
 async def before_update_stats():
     await bot.wait_until_ready()
-
-# ===== [DASHBOARD] Fast music state file (bypasses Firestore debounce) =====
-MUSIC_STATE_DIR = "/tmp/discord_music_state"
-
-def _write_music_state_fast(guild_id: str, state: dict):
-    try:
-        os.makedirs(MUSIC_STATE_DIR, exist_ok=True)
-        path = os.path.join(MUSIC_STATE_DIR, f"{guild_id}.json")
-        with open(path, "w") as f:
-            json.dump(state, f)
-    except Exception as e:
-        print(f"[MUSIC STATE FILE] Write error: {e}")
-
-# ===== [DASHBOARD] Control command processor (file-based IPC) =====
-CONTROL_QUEUE_DIR = "/tmp/discord_control_queue"
-
-async def _exec_control(cmd: dict):
-    guild_id = cmd.get("guild_id")
-    action = cmd.get("action")
-    data = cmd.get("data", {})
-    if not guild_id or not action:
-        return
-    guild = bot.get_guild(int(guild_id))
-    if not guild:
-        return
-    cog = bot.get_cog("Music")
-    if not cog:
-        return
-    vc = guild.voice_client
-    controller = cog.get_controller(int(guild_id))
-
-    if action == "pause":
-        if vc and vc.is_playing():
-            controller._paused_position = time.time() - controller._start_time
-            controller._paused = True
-            vc.pause()
-    elif action == "play":
-        if vc and vc.is_paused():
-            controller._paused = False
-            controller._start_time = time.time() - controller._paused_position
-            vc.resume()
-    elif action in ("skip", "next"):
-        if vc: vc.stop()
-    elif action == "stop":
-        await controller.stop()
-    elif action == "disconnect":
-        await controller.disconnect()
-    elif action == "clear":
-        controller.queue.clear()
-        controller._queue_history.clear()
-    elif action == "volume":
-        vol = int(data.get("volume", 100))
-        await controller.set_volume(vol)
-    elif action == "shuffle":
-        import random
-        random.shuffle(controller.queue)
-        controller._queue_history.clear()
-    elif action == "loop":
-        modes = ["off", "single", "queue"]
-        current = controller.loop_mode
-        idx = modes.index(current) if current in modes else 0
-        controller.loop_mode = modes[(idx + 1) % 3]
-        if controller.loop_mode == "queue":
-            controller._queue_history.clear()
-        if controller.loop_mode == "off":
-            controller._single_loop_track = None
-    elif action == "join":
-        channel_id = data.get("channel_id")
-        if channel_id:
-            ch = guild.get_channel(int(channel_id))
-            if ch:
-                try:
-                    await ch.connect(self_deaf=False)
-                except Exception:
-                    pass
-    elif action == "seek":
-        pct = data.get("position_pct", 0)
-        if controller.current_track:
-            pos_ms = int(controller.current_track.duration * pct)
-            await controller.seek(pos_ms)
-    elif action == "send_message":
-        channel_id = data.get("channel_id")
-        embed_data = data.get("embed")
-        content = data.get("content", "")
-        if channel_id and embed_data:
-            ch = guild.get_channel(int(channel_id))
-            if ch:
-                try:
-                    embed = discord.Embed(
-                        title=embed_data.get("title", ""),
-                        description=embed_data.get("description", ""),
-                        color=int(embed_data.get("color", "5865f2"), 16),
-                    )
-                    if embed_data.get("author_name"):
-                        embed.set_author(
-                            name=embed_data["author_name"],
-                            icon_url=embed_data.get("author_icon") or discord.Embed.Empty,
-                        )
-                    if embed_data.get("thumbnail"):
-                        embed.set_thumbnail(url=embed_data["thumbnail"])
-                    if embed_data.get("image"):
-                        embed.set_image(url=embed_data["image"])
-                    if embed_data.get("footer_text"):
-                        embed.set_footer(
-                            text=embed_data["footer_text"],
-                            icon_url=embed_data.get("footer_icon") or discord.Embed.Empty,
-                        )
-                    for field in embed_data.get("fields", []):
-                        embed.add_field(
-                            name=field.get("name", ""),
-                            value=field.get("value", ""),
-                            inline=field.get("inline", False),
-                        )
-                    await ch.send(content=content or None, embed=embed)
-                    print(f"[CONTROL] ✅ Message sent to #{ch.name} ({channel_id})")
-                except Exception as e:
-                    print(f"[CONTROL] ❌ Send message error: {e}")
-    elif action == "setting":
-        key = data.get("key")
-        value = data.get("value")
-        if key and bot.db:
-            try:
-                bot.db.collection("guild_settings").document(guild_id).set(
-                    {key: value}, merge=True
-                )
-            except Exception as e:
-                print(f"[SETTING] Write error: {e}")
-
-@tasks.loop(seconds=1)
-async def process_control_queue():
-    if not os.path.isdir(CONTROL_QUEUE_DIR):
-        return
-    try:
-        files = sorted(os.listdir(CONTROL_QUEUE_DIR))
-        for fname in files:
-            if not fname.endswith(".json"):
-                continue
-            fpath = os.path.join(CONTROL_QUEUE_DIR, fname)
-            try:
-                with open(fpath) as f:
-                    cmd = json.load(f)
-                await _exec_control(cmd)
-            except Exception as e:
-                print(f"[CONTROL QUEUE] Error processing {fname}: {e}")
-            finally:
-                try:
-                    os.remove(fpath)
-                except Exception:
-                    pass
-    except Exception as e:
-        print(f"[CONTROL QUEUE] Scan error: {e}")
 
 
 @bot.event
@@ -581,11 +259,7 @@ async def on_ready():
 
     if not update_stats.is_running():
         update_stats.start()
-        print("[DASHBOARD] Stats updater aktif (5s).")
-
-    if not process_control_queue.is_running():
-        process_control_queue.start()
-        print("[DASHBOARD] Control queue processor aktif (1s).")
+        print("[DASHBOARD] Stats updater aktif (30s).")
 
     print("=" * 50)
 
